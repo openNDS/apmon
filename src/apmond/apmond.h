@@ -23,6 +23,7 @@
 #define APMOND_BUILD_COMMIT "unknown"
 #endif
 #define APMOND_INSTALL_PATH "/usr/sbin/apmond"
+#define APMOND_CONFIG_PATH "/etc/config/apmond"
 
 struct apmond_config {
 	int enabled;
@@ -154,3 +155,9 @@ int apmond_http_post(const char *host, int port, const char *path, const uint8_t
 void apmond_identity_init(void);
 void apmond_identity_refresh(void);
 int apmond_restart_needed(void);
+
+/* config.c: give group apmond read access again after a root uci commit */
+void apmond_config_share_with_daemon(void);
+
+/* privdrop.c: become user, keeping CAP_NET_ADMIN only (when ujail is not available) */
+int apmond_drop_privileges(const char *user);

@@ -1,0 +1,12 @@
+{
+	"user": "apmond",
+	"publish": [ "apmond" ],
+	"access": {
+		"iwinfo": {
+			"methods": [ "devices", "info", "assoclist" ]
+		},
+		"network.interface.*": {
+			"methods": [ "status" ]
+		}
+	}
+}

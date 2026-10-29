@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=apmond
 PKG_VERSION:=2.0.0_beta
-PKG_RELEASE:=13
+PKG_RELEASE:=14
 
 PKG_SOURCE:=apmon-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openNDS/apmon/tar.gz/v$(PKG_VERSION)?
@@ -27,6 +27,7 @@ define Package/apmond
   CATEGORY:=Network
   TITLE:=Access point monitoring daemon (protocol 2, C)
   URL:=https://github.com/openNDS/apmon
+  USERID:=apmond=468:apmond=468
   DEPENDS:=+libubox +libubus +libuci +libblobmsg-json +libmbedtls +libmicrohttpd-no-ssl +rpcd-mod-iwinfo
 endef
 
@@ -41,13 +42,9 @@ define Package/apmond/conffiles
 /etc/config/apmond
 endef
 
-# Build identity: the commit comes from PKG_SOURCE_VERSION when set, else from .build_commit
-# in the source (written by the release/build script), else "unknown" (see CMakeLists.txt).
-APMOND_BUILD_COMMIT:=$(if $(PKG_SOURCE_VERSION),$(shell echo $(PKG_SOURCE_VERSION) | cut -c1-7))
-
 CMAKE_OPTIONS += -DBUILD_DAEMON=ON -DBUILD_TESTS=OFF -DCRYPTO_BACKEND=mbedtls
 CMAKE_OPTIONS += -DAPMOND_PACKAGE_VERSION=$(PKG_VERSION)-r$(PKG_RELEASE)
-CMAKE_OPTIONS += -DAPMOND_BUILD_COMMIT=$(APMOND_BUILD_COMMIT)
+# build_commit: CMakeLists.txt reads .build_commit, filled in by the release tarball (export-subst)
 
 define Package/apmond/install
 	$(INSTALL_DIR) $(1)/usr/sbin
@@ -56,6 +53,10 @@ define Package/apmond/install
 	$(INSTALL_CONF) ./files/apmond.config $(1)/etc/config/apmond
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/apmond.init $(1)/etc/init.d/apmond
+	$(INSTALL_DIR) $(1)/etc/capabilities
+	$(INSTALL_DATA) ./files/apmond.capabilities $(1)/etc/capabilities/apmond.json
+	$(INSTALL_DIR) $(1)/usr/share/acl.d
+	$(INSTALL_DATA) ./files/apmond_acl.json $(1)/usr/share/acl.d/apmond.json
 endef
 
 define Package/apmond/postinst
@@ -63,8 +64,15 @@ define Package/apmond/postinst
 # Appended after default_postinst, which has already run "/etc/init.d/apmond start".
 # On an upgrade procd ignores that start (same command line), so the old code keeps running: restart it.
 # Fresh install: PKG_UPGRADE is unset, default_postinst started it once. Image build: IPKG_INSTROOT is set.
-if [ -z "$${IPKG_INSTROOT}" ] && [ "$${PKG_UPGRADE}" = "1" ] && /etc/init.d/apmond running; then
-	/etc/init.d/apmond restart
+# ubusd reads /usr/share/acl.d only at start: reload it so user apmond may publish its object.
+if [ -z "$${IPKG_INSTROOT}" ]; then
+	ubusd_pid=$$(pidof ubusd)
+	if [ -n "$$ubusd_pid" ]; then
+		kill -HUP $$ubusd_pid
+	fi
+	if [ "$${PKG_UPGRADE}" = "1" ] && /etc/init.d/apmond running; then
+		/etc/init.d/apmond restart
+	fi
 fi
 endef
 

@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 
 #include <libubox/blobmsg_json.h>
 
@@ -32,7 +33,7 @@ static void usage(void)
 	       "                                       2 info, 3 debug)\n"
 	       "  read_log [-f]                        print the apmond log; -f keeps following it\n"
 	       "  bench                                time the key derivation on this hardware\n"
-	       "  run [-c confdir]                     run the daemon (used by /etc/init.d/apmond)\n"
+	       "  run [-c confdir] [-u user]           run the daemon (used by /etc/init.d/apmond)\n"
 	       "  help, -h, --help                     this text\n"
 	       "\n"
 	       "Output is JSON; -t or --table prints readable tables. Ages: 12s, 5m, 3h, 2d.\n",
@@ -943,7 +944,8 @@ static int cmd_debuglevel(int argc, char **argv)
 	struct blob_buf b;
 	struct blob_attr *msg = NULL;
 	struct blob_attr *level;
-	int wanted;
+	struct blob_attr *saved;
+	int wanted = 0;
 	int ret;
 
 	memset(&b, 0, sizeof(b));
@@ -967,6 +969,16 @@ static int cmd_debuglevel(int argc, char **argv)
 	level = top_field(msg, "debuglevel");
 	if (level != NULL) {
 		printf("%d\n", (int)blobmsg_get_u32(level));
+	}
+
+	/* the jailed daemon cannot write /etc/config: save it here (root) instead */
+	saved = top_field(msg, "persisted");
+	if (argc == 1 && saved != NULL && !blobmsg_get_u8(saved)) {
+		if (geteuid() != 0 || apmond_config_write_debuglevel(wanted) != 0) {
+			fprintf(stderr, "debuglevel set, but could not save it to /etc/config/apmond\n");
+			free(msg);
+			return 1;
+		}
 	}
 	free(msg);
 	return 0;

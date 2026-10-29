@@ -1428,7 +1428,8 @@ static int ubus_debuglevel(struct ubus_context *ctx, struct ubus_object *obj, st
 		if (apmond_config_write_debuglevel(level) == 0) {
 			persisted = 1;
 		} else {
-			LOG_ERR_("could not commit option debuglevel to /etc/config/apmond");
+			/* jailed as user apmond: /etc/config is read-only here; apmond debuglevel N (root) saves it */
+			LOG_INFO_("debuglevel %d set for this run, not saved to /etc/config/apmond", level);
 		}
 	}
 

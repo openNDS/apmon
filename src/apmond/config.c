@@ -5,6 +5,9 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <grp.h>
+#include <sys/stat.h>
+#include <unistd.h>
 
 #include <uci.h>
 
@@ -129,6 +132,27 @@ int apmond_config_read_debuglevel(void)
 	return level;
 }
 
+/*
+ * The jailed daemon runs as user apmond and reads /etc/config/apmond through group apmond
+ * (mode 0640, set by the init script). uci commit replaces the file and keeps the mode but
+ * not the group, so root restores it after its own commits. No-op unless root.
+ */
+void apmond_config_share_with_daemon(void)
+{
+	struct group *g;
+
+	if (geteuid() != 0 || loaded_confdir != NULL) {
+		return;
+	}
+	g = getgrnam("apmond");
+	if (g == NULL) {
+		return;
+	}
+	if (chown(APMOND_CONFIG_PATH, (uid_t)-1, g->gr_gid) == 0) {
+		chmod(APMOND_CONFIG_PATH, 0640);
+	}
+}
+
 /* Set and commit option debuglevel (1.x "apmond debuglevel N" committed at once too) */
 int apmond_config_write_debuglevel(int level)
 {
@@ -147,6 +171,7 @@ int apmond_config_write_debuglevel(int level)
 	if (uci_lookup_ptr(ctx, &ptr, spec, true) == UCI_OK && uci_set(ctx, &ptr) == UCI_OK) {
 		if (uci_commit(ctx, &ptr.p, false) == UCI_OK) {
 			ret = 0;
+			apmond_config_share_with_daemon();
 		}
 	}
 	uci_free_context(ctx);

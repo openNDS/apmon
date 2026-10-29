@@ -154,14 +154,27 @@ static int run_daemon(const char *confdir)
 int main(int argc, char **argv)
 {
 	if (argc >= 2 && strcmp(argv[1], "run") == 0) {
-		if (argc == 4 && strcmp(argv[2], "-c") == 0) {
-			return run_daemon(argv[3]);
+		const char *confdir = NULL;
+		const char *user = NULL;
+		int i;
+
+		for (i = 2; i + 1 < argc; i += 2) {
+			if (strcmp(argv[i], "-c") == 0) {
+				confdir = argv[i + 1];
+			} else if (strcmp(argv[i], "-u") == 0) {
+				user = argv[i + 1];
+			} else {
+				break;
+			}
 		}
-		if (argc == 2) {
-			return run_daemon(NULL);
+		if (i != argc) {
+			fprintf(stderr, "usage: apmond run [-c confdir] [-u user]\n");
+			return 1;
 		}
-		fprintf(stderr, "usage: apmond run [-c confdir]\n");
-		return 1;
+		if (user != NULL && apmond_drop_privileges(user) != 0) {
+			return 1;
+		}
+		return run_daemon(confdir);
 	}
 	if (argc == 2 && strcmp(argv[1], "bench") == 0) {
 		return bench();

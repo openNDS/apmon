@@ -41,15 +41,19 @@ if(APMOND_PACKAGE_VERSION STREQUAL "" AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
 		set(APMOND_PACKAGE_VERSION "dev")
 	endif()
 endif()
-# .build_commit first: inside an OpenWrt buildroot, git would find the buildroot's own repository
+# .build_commit holds "$Format:%h$"; git archive and GitHub/codeload tarballs replace it with the
+# short commit (.gitattributes export-subst). In a plain checkout it is still literal: ask git.
 if(NOT DEFINED APMOND_BUILD_COMMIT)
 	set(APMOND_BUILD_COMMIT "")
 endif()
 if(APMOND_BUILD_COMMIT STREQUAL "" AND EXISTS ${CMAKE_SOURCE_DIR}/.build_commit)
 	file(STRINGS ${CMAKE_SOURCE_DIR}/.build_commit APMOND_BUILD_COMMIT LIMIT_COUNT 1)
+	if(APMOND_BUILD_COMMIT MATCHES "Format")
+		set(APMOND_BUILD_COMMIT "")
+	endif()
 endif()
 if(APMOND_BUILD_COMMIT STREQUAL "" AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
-	execute_process(COMMAND git rev-parse --short=7 HEAD
+	execute_process(COMMAND git rev-parse --short HEAD
 			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
 			OUTPUT_VARIABLE APMOND_BUILD_COMMIT
 			OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
@@ -73,6 +77,7 @@ if(BUILD_DAEMON)
 		src/apmond/blocks.c
 		src/apmond/cli.c
 		src/apmond/identity.c
+		src/apmond/privdrop.c
 	)
 	target_compile_definitions(apmond PRIVATE
 		APMOND_PACKAGE_VERSION="${APMOND_PACKAGE_VERSION}"

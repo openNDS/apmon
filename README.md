@@ -104,3 +104,38 @@ show them; `apmond -t nodes` has a line per node such as
 ending in `RESTART NEEDED` when the installed binary is not the one running. The package
 restarts apmond itself on an `apk` upgrade, so this normally shows only after a manual copy.
 Nodes running a 2.0 beta before r13 show these fields as null.
+
+## Security: user apmond, CAP_NET_ADMIN only
+
+apmond does not run as root. The package creates user and group `apmond` (468), and
+the init script starts it one of two ways:
+
+- **ujail** (when `procd-ujail` is installed and the kernel has PID, IPC and UTS
+  namespaces): procd jails it as user apmond with only `CAP_NET_ADMIN`
+  (`/etc/capabilities/apmond.json`), no_new_privs, and these mounts: ubus, log, /proc,
+  /sys, read-only `/etc/config`, `/etc/openwrt_release`, `/tmp/sysinfo`, `/usr/sbin` (so
+  `installed_sha256` sees a replaced binary), `/overlay` (free flash), `/bin/sh` and
+  `/sbin/swconfig` (wired speed fallback), and read-write `/tmp/apmond` plus
+  `log_mountpoint` when it is not /tmp.
+- **otherwise** (no ujail, or a small target such as ramips/mt76x8 whose kernel has only
+  mount namespaces, where ujail cannot start): `apmond run -u apmond` starts as root and
+  switches to user apmond itself, keeping only `CAP_NET_ADMIN` (bounding, permitted,
+  effective, ambient) with no_new_privs, as dnsmasq does.
+
+`CAP_NET_ADMIN` is needed to add and remove the ULA addresses over netlink; the collector
+port (2468) needs no capability, and `CAP_NET_RAW` is not used. ubus access for user
+apmond is in `/usr/share/acl.d/apmond.json`: publish `apmond`, call `iwinfo`
+devices/info/assoclist and `network.interface.*` status. The postinst reloads ubusd so the
+ACL applies at once.
+
+`/etc/config/apmond` is root:apmond 0640 (set at every start): the daemon reads it,
+including `debuglevel` each cycle, but cannot write it. `apmond debuglevel N` (as root)
+saves the level to uci itself and restores the group; `ubus call apmond debuglevel
+'{"level":N}'` changes it for the running daemon (`"persisted": false` when jailed). A
+`uci commit apmond` by another tool keeps the mode but resets the group to root, so the
+daemon keeps its current settings until the next restart or `service apmond reload`.
+The CLI (`apmond status`, `nodes`, ...) runs as root outside the jail and talks over ubus.
+
+`build_commit` comes from `.build_commit`, which holds `$Format:%h$`: `git archive` and
+GitHub release tarballs fill in the short commit (`.gitattributes` export-subst). A build
+from a plain checkout asks git, else shows "unknown".

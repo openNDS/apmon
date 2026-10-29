@@ -292,11 +292,18 @@ static int ipv4_successes;
 static void report_cb(struct uloop_timeout *t)
 {
 	int status;
+	static int uci_level = -1;
 	int level = apmond_config_read_debuglevel();
 
-	/* as 1.x: a debuglevel changed in uci applies on the next cycle */
-	if (level >= 0 && level != apmond.cfg.debuglevel) {
-		apmond_set_debuglevel(level);
+	/*
+	 * As 1.x: a debuglevel changed in uci applies on the next cycle. Only a change in uci
+	 * counts, so a level set over ubus that could not be saved (jailed) is not undone here.
+	 */
+	if (level >= 0 && level != uci_level) {
+		uci_level = level;
+		if (level != apmond.cfg.debuglevel) {
+			apmond_set_debuglevel(level);
+		}
 	}
 
 	decide_role();
