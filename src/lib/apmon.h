@@ -1,0 +1,150 @@
+/*
+ * libapmon - apmon protocol 2 (see docs/PROTOCOL.md)
+ *
+ * This file is part of apmon. SPDX-License-Identifier: GPL-2.0-only
+ */
+#pragma once
+
+#include <stddef.h>
+#include <stdint.h>
+
+#define APMON_MAGIC "APM2"
+#define APMON_VERSION 2
+#define APMON_HEADER_LEN 48
+#define APMON_NONCE_LEN 12
+#define APMON_TAG_LEN 16
+#define APMON_KEY_LEN 32
+#define APMON_ID_LEN 6
+
+#define APMON_PBKDF2_SALT "apmon/2 pbkdf2"
+#define APMON_PBKDF2_ITERATIONS 50000
+#define APMON_HKDF_SALT "apmon/2 salt"
+#define APMON_INFO_S2C "apmon/2 s2c"
+#define APMON_INFO_C2S "apmon/2 c2s"
+
+#define APMON_DEFAULT_PORT 2468
+#define APMON_PATH_REPORT "/apmon/v2/report"
+#define APMON_PATH_TIME "/apmon/v2/time"
+#define APMON_CONTENT_TYPE "application/vnd.apmon.v2"
+#define APMON_DEFAULT_MAX_MESSAGE 262144
+
+/* Message types */
+#define APMON_TYPE_REPORT 0x01
+#define APMON_TYPE_TIME_REQ 0x02
+#define APMON_TYPE_ACK 0x81
+#define APMON_TYPE_TIME_RESP 0x82
+#define APMON_TYPE_ERROR 0x8f
+
+/* Header flags */
+#define APMON_FLAG_CLOCK_FROM_COLLECTOR 0x0001
+#define APMON_FLAG_DEFAULT_PASSPHRASE 0x0002
+#define APMON_FLAGS_KNOWN 0x0003
+
+/* Results of apmon_open() and the replay check, mapped to HTTP status codes by the collector */
+enum apmon_result {
+	APMON_OK = 0,
+	APMON_ERR_MALFORMED,     /* 400 */
+	APMON_ERR_AUTH,          /* 401 */
+	APMON_ERR_VERSION,       /* 426 */
+	APMON_ERR_TIME,          /* 409 */
+	APMON_ERR_REPLAY,        /* 409 */
+	APMON_ERR_NOMEM,
+	APMON_ERR_CRYPTO,
+};
+
+struct apmon_keys {
+	uint32_t epoch;
+	uint8_t s2c[APMON_KEY_LEN];
+	uint8_t c2s[APMON_KEY_LEN];
+};
+
+struct apmon_header {
+	uint8_t version;
+	uint8_t type;
+	uint16_t flags;
+	uint32_t key_epoch;
+	uint8_t sender_id[APMON_ID_LEN];
+	uint64_t timestamp_ms;
+	uint32_t seq;
+	uint8_t nonce[APMON_NONCE_LEN];
+	uint32_t ct_len;
+};
+
+/* crypto.c (backend selected at build time; mbedtls for now) */
+int apmon_random(void *buf, size_t len);
+int apmon_pbkdf2_sha256(const uint8_t *pw, size_t pw_len, const uint8_t *salt, size_t salt_len,
+			unsigned int iterations, uint8_t *out, size_t out_len);
+int apmon_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len,
+		      uint8_t out[32]);
+int apmon_gcm_seal(const uint8_t key[APMON_KEY_LEN], const uint8_t nonce[APMON_NONCE_LEN],
+		   const uint8_t *aad, size_t aad_len, const uint8_t *pt, size_t pt_len, uint8_t *ct_tag);
+int apmon_gcm_open(const uint8_t key[APMON_KEY_LEN], const uint8_t nonce[APMON_NONCE_LEN],
+		   const uint8_t *aad, size_t aad_len, const uint8_t *ct_tag, size_t ct_tag_len, uint8_t *pt);
+
+/* kdf.c */
+int apmon_hkdf_extract(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len,
+		       uint8_t prk[32]);
+int apmon_hkdf_expand(const uint8_t prk[32], const uint8_t *info, size_t info_len, uint8_t *out, size_t out_len);
+int apmon_derive_keys(const char *passphrase, uint32_t epoch, struct apmon_keys *keys);
+
+/* envelope.c */
+void apmon_header_encode(const struct apmon_header *h, uint8_t out[APMON_HEADER_LEN]);
+enum apmon_result apmon_header_decode(const uint8_t *buf, size_t len, struct apmon_header *h);
+
+/*
+ * Seal: fills in nonce (random) and ct_len, writes header + ciphertext + tag to *out (malloc'd).
+ * Open: checks the header and tag, returns the plaintext as a malloc'd NUL-terminated string.
+ */
+enum apmon_result apmon_seal(const uint8_t key[APMON_KEY_LEN], struct apmon_header *h,
+			     const char *plaintext, size_t pt_len, uint8_t **out, size_t *out_len);
+enum apmon_result apmon_seal_with_nonce(const uint8_t key[APMON_KEY_LEN], struct apmon_header *h,
+					const char *plaintext, size_t pt_len, uint8_t **out, size_t *out_len);
+enum apmon_result apmon_open(const uint8_t key[APMON_KEY_LEN], const uint8_t *msg, size_t msg_len,
+			     struct apmon_header *h, char **plaintext, size_t *pt_len);
+
+/* replay.c */
+struct apmon_replay_entry {
+	uint8_t sender_id[APMON_ID_LEN];
+	uint8_t nonce[APMON_NONCE_LEN];
+	uint64_t expires_ms;
+};
+
+struct apmon_replay {
+	struct apmon_replay_entry *entries;
+	size_t size;
+	uint64_t max_skew_ms;
+};
+
+int apmon_replay_init(struct apmon_replay *r, size_t size, uint64_t max_skew_ms);
+void apmon_replay_free(struct apmon_replay *r);
+enum apmon_result apmon_replay_check(struct apmon_replay *r, const struct apmon_header *h, uint64_t now_ms,
+				     int check_window);
+
+/* util.c */
+uint64_t apmon_now_ms(void);
+uint64_t apmon_monotonic_ms(void);
+void apmon_hex_encode(const uint8_t *in, size_t len, char *out);
+int apmon_hex_decode(const char *in, uint8_t *out, size_t out_len);
+void apmon_mac_format(const uint8_t id[APMON_ID_LEN], char out[18]);
+int apmon_mac_parse(const char *s, uint8_t id[APMON_ID_LEN]);
+
+/* json.c - small JSON writer for building payloads */
+struct apmon_json {
+	char *buf;
+	size_t len;
+	size_t cap;
+	int need_comma;
+	int failed;
+};
+
+void apmon_json_init(struct apmon_json *j);
+void apmon_json_free(struct apmon_json *j);
+void apmon_json_open_object(struct apmon_json *j, const char *key);
+void apmon_json_close_object(struct apmon_json *j);
+void apmon_json_open_array(struct apmon_json *j, const char *key);
+void apmon_json_close_array(struct apmon_json *j);
+void apmon_json_string(struct apmon_json *j, const char *key, const char *value);
+void apmon_json_int(struct apmon_json *j, const char *key, int64_t value);
+void apmon_json_double(struct apmon_json *j, const char *key, double value);
+void apmon_json_bool(struct apmon_json *j, const char *key, int value);
+void apmon_json_null(struct apmon_json *j, const char *key);
