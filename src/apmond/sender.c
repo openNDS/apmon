@@ -48,6 +48,18 @@ static int collector_candidate(void)
  * Sender target: option collector if set, else the collector ULA <prefix>:<subnet>::1,
  * falling back to the default gateway's IPv4 address after a failed attempt (and back again).
  */
+/* For log messages: the collector's own reports never leave the node */
+static const char *collector_name(void)
+{
+	if (apmond.role == ROLE_COLLECTOR) {
+		return "local";
+	}
+	if (apmond.collector_addr[0] == '\0') {
+		return "(none)";
+	}
+	return apmond.collector_addr;
+}
+
 static void choose_collector_address(void)
 {
 	char ifname[32];
@@ -327,7 +339,7 @@ static void report_cb(struct uloop_timeout *t)
 				apmond.reports_sent++;
 				apmond.last_ack_ms = apmond_sender_time();
 				LOG_DEBUG_("report %u accepted by collector %s", (unsigned int)(apmond.seq - 1),
-					   apmond.collector_addr);
+					   collector_name());
 			} else {
 				apmond.reports_failed++;
 				LOG_INFO_("report not accepted (HTTP %d)", status);

@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=apmond
 PKG_VERSION:=2.0.0_beta
-PKG_RELEASE:=11
+PKG_RELEASE:=12
 
 PKG_SOURCE:=apmon-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openNDS/apmon/tar.gz/v$(PKG_VERSION)?
@@ -50,6 +50,16 @@ define Package/apmond/install
 	$(INSTALL_CONF) ./files/apmond.config $(1)/etc/config/apmond
 	$(INSTALL_DIR) $(1)/etc/init.d
 	$(INSTALL_BIN) ./files/apmond.init $(1)/etc/init.d/apmond
+endef
+
+define Package/apmond/postinst
+#!/bin/sh
+# Appended after default_postinst, which has already run "/etc/init.d/apmond start".
+# On an upgrade procd ignores that start (same command line), so the old code keeps running: restart it.
+# Fresh install: PKG_UPGRADE is unset, default_postinst started it once. Image build: IPKG_INSTROOT is set.
+if [ -z "$${IPKG_INSTROOT}" ] && [ "$${PKG_UPGRADE}" = "1" ] && /etc/init.d/apmond running; then
+	/etc/init.d/apmond restart
+fi
 endef
 
 $(eval $(call BuildPackage,apmond))
