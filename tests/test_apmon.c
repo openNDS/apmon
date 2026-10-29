@@ -260,6 +260,64 @@ static void test_json(void)
 	apmon_json_free(&j);
 }
 
+static void test_extra(void)
+{
+	struct apmon_keys cur;
+	struct apmon_keys prev;
+	struct apmon_keys direct;
+	struct apmon_table t;
+	uint8_t prefix[8];
+	uint8_t mac[6];
+	uint8_t iid[8];
+	char hex[17];
+	char age[16];
+	char out[256];
+
+	/* apmond 1.x put the default passphrase's collector on fd46:cfe5:34c5:6ddd::1 */
+	CHECK(apmon_ula_prefix(TV_DEFAULT_PASSPHRASE, prefix) == 0, "ULA prefix derived");
+	apmon_hex_encode(prefix, 8, hex);
+	CHECK(strcmp(hex, "fd46cfe534c56ddd") == 0, "ULA prefix matches apmond 1.x");
+
+	apmon_mac_parse("52:54:00:12:34:01", mac);
+	apmon_eui64_iid(mac, iid);
+	apmon_hex_encode(iid, 8, hex);
+	CHECK(strcmp(hex, "505400fffe123401") == 0, "EUI-64 interface id");
+
+	CHECK(apmon_block_name_valid("mesh"), "block name mesh valid");
+	CHECK(apmon_block_name_valid("mesh_11-s2"), "block name with _ - digits valid");
+	CHECK(!apmon_block_name_valid(""), "empty block name invalid");
+	CHECK(!apmon_block_name_valid("Mesh"), "upper case block name invalid");
+	CHECK(!apmon_block_name_valid("a.b"), "dot in block name invalid");
+	CHECK(!apmon_block_name_valid("a b"), "space in block name invalid");
+	CHECK(!apmon_block_name_valid("abcdefghijklmnopqrstuvwxyz0123456"), "33 character block name invalid");
+	CHECK(apmon_block_name_valid("abcdefghijklmnopqrstuvwxyz012345"), "32 character block name valid");
+
+	apmon_format_age(12, age, sizeof(age));
+	CHECK(strcmp(age, "12s") == 0, "age 12s");
+	apmon_format_age(300, age, sizeof(age));
+	CHECK(strcmp(age, "5m") == 0, "age 5m");
+	apmon_format_age(7200, age, sizeof(age));
+	CHECK(strcmp(age, "2h") == 0, "age 2h");
+	apmon_format_age(200000, age, sizeof(age));
+	CHECK(strcmp(age, "2d") == 0, "age 2d");
+
+	apmon_table_init(&t, 3);
+	apmon_table_add(&t, "MAC");
+	apmon_table_add(&t, "STATE");
+	apmon_table_add(&t, "AGE");
+	apmon_table_add(&t, "aa:bb");
+	apmon_table_add(&t, "stale*");
+	apmon_table_add(&t, "5m");
+	apmon_table_render(&t, out, sizeof(out));
+	CHECK(strcmp(out, "MAC    STATE   AGE\naa:bb  stale*  5m\n") == 0, "table columns aligned");
+	apmon_table_free(&t);
+
+	CHECK(apmon_derive_keys_with_previous(TV_CHBS_PASSPHRASE, 1, &cur, &prev) == 0, "derive epoch 1 + previous");
+	apmon_derive_keys(TV_CHBS_PASSPHRASE, 0, &direct);
+	CHECK(prev.epoch == 0 && memcmp(prev.s2c, direct.s2c, 32) == 0, "previous epoch keys equal epoch 0 keys");
+	CHECK(cur.epoch == 1 && memcmp(cur.s2c, direct.s2c, 32) != 0, "epoch 1 keys differ");
+}
+
 int main(void)
 {
 	test_rfc5869();
@@ -269,6 +327,7 @@ int main(void)
 	test_negative();
 	test_round_trip_and_replay();
 	test_json();
+	test_extra();
 
 	printf("\n%d passed, %d failed\n", passes, failures);
 	if (failures > 0) {

@@ -102,3 +102,16 @@ int apmon_gcm_open(const uint8_t key[APMON_KEY_LEN], const uint8_t nonce[APMON_N
 	}
 	return 0;
 }
+
+int apmon_sha256(const uint8_t *data, size_t len, uint8_t out[32])
+{
+	const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+
+	if (md == NULL) {
+		return -1;
+	}
+	if (mbedtls_md(md, data, len, out) != 0) {
+		return -1;
+	}
+	return 0;
+}

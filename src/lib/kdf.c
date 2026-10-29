@@ -65,33 +65,60 @@ static int expand_with_epoch(const uint8_t prk[32], const char *label, uint32_t 
 	return apmon_hkdf_expand(prk, info, label_len + 4, out, APMON_KEY_LEN);
 }
 
-int apmon_derive_keys(const char *passphrase, uint32_t epoch, struct apmon_keys *keys)
+static int derive_prk(const char *passphrase, uint8_t prk[32])
 {
 	uint8_t ikm[32];
-	uint8_t prk[32];
 	int ret = -1;
 
 	if (apmon_pbkdf2_sha256((const uint8_t *)passphrase, strlen(passphrase),
 				(const uint8_t *)APMON_PBKDF2_SALT, strlen(APMON_PBKDF2_SALT),
-				APMON_PBKDF2_ITERATIONS, ikm, sizeof(ikm)) != 0) {
-		goto out;
+				APMON_PBKDF2_ITERATIONS, ikm, sizeof(ikm)) == 0) {
+		ret = apmon_hkdf_extract((const uint8_t *)APMON_HKDF_SALT, strlen(APMON_HKDF_SALT), ikm, sizeof(ikm), prk);
 	}
-	if (apmon_hkdf_extract((const uint8_t *)APMON_HKDF_SALT, strlen(APMON_HKDF_SALT), ikm, sizeof(ikm), prk) != 0) {
-		goto out;
-	}
+	memset(ikm, 0, sizeof(ikm));
+	return ret;
+}
 
+static int keys_from_prk(const uint8_t prk[32], uint32_t epoch, struct apmon_keys *keys)
+{
 	keys->epoch = epoch;
 
 	if (expand_with_epoch(prk, APMON_INFO_S2C, epoch, keys->s2c) != 0) {
-		goto out;
+		return -1;
 	}
 	if (expand_with_epoch(prk, APMON_INFO_C2S, epoch, keys->c2s) != 0) {
-		goto out;
+		return -1;
 	}
-	ret = 0;
+	return 0;
+}
 
-out:
-	memset(ikm, 0, sizeof(ikm));
+int apmon_derive_keys(const char *passphrase, uint32_t epoch, struct apmon_keys *keys)
+{
+	uint8_t prk[32];
+	int ret = -1;
+
+	if (derive_prk(passphrase, prk) == 0) {
+		ret = keys_from_prk(prk, epoch, keys);
+	}
+	memset(prk, 0, sizeof(prk));
+	return ret;
+}
+
+/* previous is left zeroed with epoch 0 when epoch is 0 (there is no previous epoch) */
+int apmon_derive_keys_with_previous(const char *passphrase, uint32_t epoch, struct apmon_keys *current,
+				    struct apmon_keys *previous)
+{
+	uint8_t prk[32];
+	int ret = -1;
+
+	memset(previous, 0, sizeof(*previous));
+
+	if (derive_prk(passphrase, prk) == 0) {
+		ret = keys_from_prk(prk, epoch, current);
+		if (ret == 0 && epoch > 0) {
+			ret = keys_from_prk(prk, epoch - 1, previous);
+		}
+	}
 	memset(prk, 0, sizeof(prk));
 	return ret;
 }

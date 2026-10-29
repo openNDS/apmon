@@ -149,3 +149,29 @@ void apmon_json_double(struct apmon_json *j, const char *key, double value);
 void apmon_json_bool(struct apmon_json *j, const char *key, int value);
 void apmon_json_null(struct apmon_json *j, const char *key);
 void apmon_json_raw(struct apmon_json *j, const char *key, const char *raw);
+
+/* extra.c */
+#define APMON_BLOCK_NAME_MAX 32
+#define APMON_BLOCK_DATA_MAX 16384
+#define APMON_TABLE_MAX_COLUMNS 16
+
+struct apmon_table {
+	char **cells;
+	size_t count;
+	size_t cap;
+	int columns;
+};
+
+int apmon_sha256(const uint8_t *data, size_t len, uint8_t out[32]);
+int apmon_ula_prefix(const char *passphrase, uint8_t out[8]);
+void apmon_eui64_iid(const uint8_t mac[APMON_ID_LEN], uint8_t out[8]);
+int apmon_block_name_valid(const char *name);
+void apmon_format_age(int64_t seconds, char *out, size_t out_len);
+void apmon_table_init(struct apmon_table *t, int columns);
+void apmon_table_add(struct apmon_table *t, const char *cell);
+size_t apmon_table_render(const struct apmon_table *t, char *out, size_t out_len);
+void apmon_table_free(struct apmon_table *t);
+
+/* kdf.c: keys for the current and the previous epoch from one PBKDF2 run */
+int apmon_derive_keys_with_previous(const char *passphrase, uint32_t epoch, struct apmon_keys *current,
+				    struct apmon_keys *previous);
