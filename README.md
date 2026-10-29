@@ -63,6 +63,10 @@ Example:
     === OpenWrt-f9d1  94:83:c4:2e:f9:d1  peer  ok  last report 3s ago
         ...
 
+## Times
+
+In collector output (`apmond nodes|node|clients` and the ubus methods) client `last_seen` and node `last_report` are Unix seconds, each with a `_date` twin in apmond 1.x's `date_time` format (router local time, spaces as `_`, eg `Thu_Oct_29_15:47:00_GMT_2026`), plus `last_seen_age_s` / `age_s`. Reports on the wire keep milliseconds.
+
 ## VLANs and VXLAN
 
 Every AP and client carries `vlan`: the access VLAN of its bridge port (PVID on a `vlan_filtering` bridge, so an AP on `option network lan` with lan on `br-lan.10` shows 10; a Wi-Fi client has its AP's VLAN, a wired client its port's). `null` means untagged / no VLAN; tables show `-`. On mesh11sd nodes, where the trunk is a VXLAN (`vxlan<tun_id>` in `br-tun<tun_id>`), APs and clients on that bridge also carry `"vxlan": {"vni": N, "device": "vxlan0"}`, otherwise `null`. Both come from rtnetlink, no forks, cached 5 minutes.

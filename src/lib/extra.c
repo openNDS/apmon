@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "apmon.h"
 
@@ -245,4 +246,32 @@ int apmon_vlan_from_name(const char *ifname)
 		}
 	}
 	return vid;
+}
+
+/*
+ * Date as apmond 1.x date_time: date(1)'s "%a %b %e %H:%M:%S %Z %Y" in local time,
+ * spaces replaced by "_", eg Thu_Oct_29_15:47:00_GMT_2026
+ */
+void apmon_format_date(int64_t unix_s, char *out, size_t len)
+{
+	time_t t = (time_t)unix_s;
+	struct tm tm;
+	size_t i;
+
+	if (len == 0) {
+		return;
+	}
+	out[0] = '\0';
+	if (localtime_r(&t, &tm) == NULL) {
+		return;
+	}
+	if (strftime(out, len, "%a %b %e %H:%M:%S %Z %Y", &tm) == 0) {
+		out[0] = '\0';
+		return;
+	}
+	for (i = 0; out[i] != '\0'; i++) {
+		if (out[i] == ' ') {
+			out[i] = '_';
+		}
+	}
 }

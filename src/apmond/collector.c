@@ -859,6 +859,19 @@ static struct node **sorted_nodes(int *count)
 	return list;
 }
 
+/* <name>: Unix seconds, and <name>_date: the same as 1.x date_time (local time) */
+static void add_time(struct blob_buf *b, const char *name, int64_t unix_ms)
+{
+	char key[64];
+	char date[64];
+	int64_t secs = unix_ms / 1000;
+
+	blobmsg_add_u64(b, name, (uint64_t)secs);
+	snprintf(key, sizeof(key), "%s_date", name);
+	apmon_format_date(secs, date, sizeof(date));
+	blobmsg_add_string(b, key, date);
+}
+
 /* One client: state, age, the node's hostname, then the client's own report fields */
 static void add_client(struct client *c, struct node *n, uint64_t now)
 {
@@ -879,7 +892,14 @@ static void add_client(struct client *c, struct node *n, uint64_t now)
 		blobmsg_add_u32(&bb, "last_seen_age_s", (uint32_t)(age_ms(now, (uint64_t)c->last_seen) / 1000));
 	}
 	blobmsg_for_each_attr(cur, c->data, rem) {
+		/* last_seen is shown in seconds with a date (below), as 1.x timestamp/date_time */
+		if (strcmp(blobmsg_name(cur), "last_seen") == 0) {
+			continue;
+		}
 		blobmsg_add_blob(&bb, cur);
+	}
+	if (c->last_seen > 0) {
+		add_time(&bb, "last_seen", c->last_seen);
 	}
 	blobmsg_close_table(&bb, t);
 }
@@ -913,7 +933,7 @@ static void add_node_fields(struct node *n, uint64_t now)
 	}
 	blobmsg_add_string(&bb, "state", node_state(n, now));
 	blobmsg_add_u32(&bb, "age_s", (uint32_t)(age_ms(now, n->received_ms) / 1000));
-	blobmsg_add_u64(&bb, "last_report", n->received_ms);
+	add_time(&bb, "last_report", (int64_t)n->received_ms);
 	blobmsg_add_string(&bb, "source", n->source);
 	blobmsg_add_u64(&bb, "reports", n->reports);
 	blobmsg_add_u64(&bb, "lost_reports", n->lost);

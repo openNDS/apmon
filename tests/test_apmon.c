@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "apmon.h"
 #include "vectors/vectors.h"
@@ -381,6 +382,17 @@ static void test_extra(void)
 		CHECK(apmon_vlan_from_name("phy0-ap0") == 0, "VLAN from name phy0-ap0");
 		CHECK(apmon_vlan_from_name("eth0.5000") == 0, "VLAN from name out of range");
 		CHECK(apmon_vlan_from_name("wlan0.sta1") == 0, "VLAN from name non-numeric");
+	}
+
+	{
+		char date[64];
+
+		setenv("TZ", "GMT0", 1);
+		tzset();
+		apmon_format_date(1793288820, date, sizeof(date));
+		CHECK(strcmp(date, "Thu_Oct_29_15:47:00_GMT_2026") == 0, "date as 1.x date_time");
+		apmon_format_date(1791546420, date, sizeof(date));
+		CHECK(strcmp(date, "Fri_Oct__9_11:47:00_GMT_2026") == 0, "date with a one digit day, as date(1)");
 	}
 
 	apmon_format_age(12, age, sizeof(age));
