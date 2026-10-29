@@ -9,6 +9,7 @@
 #include <net/if.h>
 #include <netinet/in.h>
 #include <stdio.h>
+#include <sys/stat.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/statvfs.h>
@@ -553,6 +554,21 @@ static int is_wifi_mac_or_if(struct wifi_macs *macs, const char *mac, const char
 	return 0;
 }
 
+static int is_wireless_port(const char *port)
+{
+	char path[128];
+	struct stat st;
+
+	if (port[0] == '\0') {
+		return 0;
+	}
+	snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211", port);
+	if (stat(path, &st) == 0) {
+		return 1;
+	}
+	return 0;
+}
+
 static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now_ms, struct wifi_macs *macs)
 {
 	char bridge[32];
@@ -592,6 +608,12 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 		port_name(bridge, port_no, port, sizeof(port));
 
 		if (is_wifi_mac_or_if(macs, mac, port)) {
+			continue;
+		}
+
+		/* Skip MACs learned over a wireless port (eg an 802.11s mesh backhaul).
+		 * They are remote, Wi-Fi clients come from iwinfo instead */
+		if (is_wireless_port(port)) {
 			continue;
 		}
 
