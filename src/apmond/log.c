@@ -1,6 +1,8 @@
 /*
  * apmond logging, as apmond 1.x / mesh11sd:
- * - messages above debuglevel are dropped; identical consecutive messages are dropped
+ * - messages above debuglevel are dropped; an identical consecutive message is counted instead
+ *   of written, and "previous message repeated N times" is logged before the next one or at the
+ *   latest after 5 minutes (as syslog), so a quiet daemon still shows it is alive
  * - err and notice go to syslog AND the log file; info and debug go to the log file only
  * - log file <log_mountpoint>/apmond/apmond_log.log (/tmp/apmond/apmond_log.log by default),
  *   lines "<date> daemon.<level> apmond[<pid>]: [<n>] <message>", trimmed to max_log_entries
@@ -25,7 +27,7 @@ static char log_file[192];
 static int log_file_ok;
 static int log_lines;
 static unsigned long entry_num;
-static char last_message[512];
+static struct apmon_dedupe dedupe;
 
 static int is_mountpoint(const char *path)
 {
@@ -97,31 +99,13 @@ int apmond_log_path(const struct apmond_config *cfg, char *path, size_t path_len
 	return 0;
 }
 
-static int count_lines(const char *path)
-{
-	FILE *f = fopen(path, "r");
-	int c;
-	int n = 0;
-
-	if (f == NULL) {
-		return 0;
-	}
-	while ((c = fgetc(f)) != EOF) {
-		if (c == '\n') {
-			n++;
-		}
-	}
-	fclose(f);
-	return n;
-}
-
 void apmond_log_init(void)
 {
 	char reason[256];
 
 	if (apmond_log_path(&apmond.cfg, log_file, sizeof(log_file), reason, sizeof(reason), 1) == 0) {
 		log_file_ok = 1;
-		log_lines = count_lines(log_file);
+		log_lines = apmon_count_lines(log_file);
 		if (reason[0] != '\0') {
 			LOG_NOTICE_("%s", reason);
 		}
@@ -130,56 +114,6 @@ void apmond_log_init(void)
 		log_file_ok = 0;
 		syslog(LOG_ERR, "%s", reason);
 	}
-}
-
-/* Keep the last max_log_entries lines */
-static void trim_log(void)
-{
-	FILE *f;
-	char *buf;
-	long size;
-	long pos;
-	int keep = apmond.cfg.max_log_entries;
-	int seen = 0;
-
-	f = fopen(log_file, "r");
-	if (f == NULL) {
-		return;
-	}
-	fseek(f, 0, SEEK_END);
-	size = ftell(f);
-	fseek(f, 0, SEEK_SET);
-
-	buf = malloc((size_t)size + 1);
-	if (buf == NULL) {
-		fclose(f);
-		return;
-	}
-	size = (long)fread(buf, 1, (size_t)size, f);
-	fclose(f);
-
-	/* walk back over keep lines */
-	pos = size;
-	if (pos > 0 && buf[pos - 1] == '\n') {
-		pos--;
-	}
-	while (pos > 0) {
-		if (buf[pos - 1] == '\n') {
-			seen++;
-			if (seen == keep) {
-				break;
-			}
-		}
-		pos--;
-	}
-
-	f = fopen(log_file, "w");
-	if (f != NULL) {
-		fwrite(buf + pos, 1, (size_t)(size - pos), f);
-		fclose(f);
-	}
-	free(buf);
-	log_lines = keep;
 }
 
 static void write_file(const char *level, const char *msg)
@@ -217,36 +151,22 @@ static void write_file(const char *level, const char *msg)
 	log_lines++;
 
 	if (log_lines > apmond.cfg.max_log_entries) {
-		trim_log();
+		int left = apmon_trim_log(log_file, apmond.cfg.max_log_entries);
+
+		if (left >= 0) {
+			log_lines = left;
+		} else {
+			/* recount instead of trimming again on every line */
+			log_lines = apmon_count_lines(log_file);
+		}
 	}
 }
 
-void apmond_log(int level, const char *fmt, ...)
+static void emit(int level, const char *msg)
 {
 	static const int prio[] = { LOG_ERR, LOG_NOTICE, LOG_INFO, LOG_DEBUG };
 	static const char *names[] = { "err", "notice", "info", "debug" };
-	char msg[512];
 	char line[540];
-	va_list ap;
-
-	if (level < 0) {
-		level = 0;
-	}
-	if (level > 3) {
-		level = 3;
-	}
-	if (level > apmond.cfg.debuglevel && level > 0) {
-		return;
-	}
-
-	va_start(ap, fmt);
-	vsnprintf(msg, sizeof(msg), fmt, ap);
-	va_end(ap);
-
-	if (strcmp(msg, last_message) == 0) {
-		return;
-	}
-	snprintf(last_message, sizeof(last_message), "%s", msg);
 
 	entry_num++;
 	snprintf(line, sizeof(line), "[%lu] %s", entry_num, msg);
@@ -263,6 +183,35 @@ void apmond_log(int level, const char *fmt, ...)
 		syslog(prio[level], "%s", line);
 	}
 	write_file(names[level], line);
+}
+
+void apmond_log(int level, const char *fmt, ...)
+{
+	char msg[512];
+	char summary[64];
+	va_list ap;
+
+	if (level < 0) {
+		level = 0;
+	}
+	if (level > 3) {
+		level = 3;
+	}
+	if (level > apmond.cfg.debuglevel && level > 0) {
+		return;
+	}
+
+	va_start(ap, fmt);
+	vsnprintf(msg, sizeof(msg), fmt, ap);
+	va_end(ap);
+
+	if (!apmon_dedupe_check(&dedupe, msg, (int64_t)time(NULL), summary, sizeof(summary))) {
+		return;
+	}
+	if (summary[0] != '\0') {
+		emit(level, summary);
+	}
+	emit(level, msg);
 }
 
 /* apmond read_log [-f]: print the log, then (follow) print new lines as they are written */

@@ -326,7 +326,8 @@ static void report_cb(struct uloop_timeout *t)
 			if (status == 200) {
 				apmond.reports_sent++;
 				apmond.last_ack_ms = apmond_sender_time();
-				LOG_DEBUG_("report accepted");
+				LOG_DEBUG_("report %u accepted by collector %s", (unsigned int)(apmond.seq - 1),
+					   apmond.collector_addr);
 			} else {
 				apmond.reports_failed++;
 				LOG_INFO_("report not accepted (HTTP %d)", status);

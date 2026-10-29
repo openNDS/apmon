@@ -328,6 +328,7 @@ int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const
 	enum apmon_result res;
 	char *pt = NULL;
 	char nonce_hex[2 * APMON_NONCE_LEN + 1];
+	char sender_mac[18];
 	char json[256];
 	uint64_t now = apmon_now_ms();
 	uint8_t expected_type = APMON_TYPE_REPORT;
@@ -397,6 +398,8 @@ int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const
 	}
 	free(pt);
 	count_accepted++;
+	apmon_mac_format(h.sender_id, sender_mac);
+	LOG_DEBUG_("report %u from %s (%s) accepted", (unsigned int)h.seq, sender_mac, source);
 
 	snprintf(json, sizeof(json),
 		 "{\"v\":2,\"type\":\"ack\",\"status\":\"ok\",\"collector_time\":%llu,\"echo_nonce\":\"%s\",\"interval\":%d}",

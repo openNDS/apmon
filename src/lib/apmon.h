@@ -206,6 +206,21 @@ int apmon_client_ordered_field(const char *name);
 int apmon_debuglevel_parse(const char *text, int *level);
 void apmon_format_date(int64_t unix_s, char *out, size_t len);
 
+/* Log file helpers (logfile.c) */
+#define APMON_DEDUPE_SECONDS 300
+
+struct apmon_dedupe {
+	char last[512];
+	int have_last;
+	unsigned int repeats;
+	int64_t written_s;
+};
+
+void apmon_dedupe_init(struct apmon_dedupe *d);
+int apmon_dedupe_check(struct apmon_dedupe *d, const char *msg, int64_t now_s, char *summary, size_t len);
+int apmon_count_lines(const char *path);
+int apmon_trim_log(const char *path, int keep);
+
 void apmon_table_init(struct apmon_table *t, int columns);
 void apmon_table_add(struct apmon_table *t, const char *cell);
 size_t apmon_table_render(const struct apmon_table *t, char *out, size_t out_len);

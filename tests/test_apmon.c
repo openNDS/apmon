@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <time.h>
 
 #include "apmon.h"
@@ -442,8 +443,164 @@ static void test_extra(void)
 	CHECK(cur.epoch == 1 && memcmp(cur.s2c, direct.s2c, 32) != 0, "epoch 1 keys differ");
 }
 
+
+/*
+ * Host model of apmond's logging (log.c): dedupe, append, trim at max_log_entries.
+ * Regression for r10: an identical recurring message ("report accepted") was dropped
+ * forever, so the log went silent after start-up.
+ */
+static int sim_lines;
+
+static void sim_append(const char *path, const char *msg, int max)
+{
+	FILE *f = fopen(path, "a");
+
+	if (f == NULL) {
+		return;
+	}
+	fprintf(f, "%s\n", msg);
+	fclose(f);
+	sim_lines++;
+	if (sim_lines > max) {
+		sim_lines = apmon_trim_log(path, max);
+	}
+}
+
+static void sim_log(struct apmon_dedupe *d, const char *path, const char *msg, int64_t now, int max)
+{
+	char summary[64];
+
+	if (!apmon_dedupe_check(d, msg, now, summary, sizeof(summary))) {
+		return;
+	}
+	if (summary[0] != '\0') {
+		sim_append(path, summary, max);
+	}
+	sim_append(path, msg, max);
+}
+
+static void first_and_last(const char *path, char *first, char *last, size_t len)
+{
+	FILE *f = fopen(path, "r");
+	char line[256];
+
+	first[0] = '\0';
+	last[0] = '\0';
+	if (f == NULL) {
+		return;
+	}
+	while (fgets(line, sizeof(line), f) != NULL) {
+		line[strcspn(line, "\n")] = '\0';
+		if (first[0] == '\0') {
+			snprintf(first, len, "%s", line);
+		}
+		snprintf(last, len, "%s", line);
+	}
+	fclose(f);
+}
+
+static void test_logfile(void)
+{
+	char path[] = "/tmp/apmon-test-log.XXXXXX";
+	struct apmon_dedupe d;
+	char first[256];
+	char last[256];
+	char msg[64];
+	char expect[64];
+	int fd;
+	int i;
+	int cycle;
+	int64_t now = 1000000;
+	FILE *f;
+
+	fd = mkstemp(path);
+	CHECK(fd >= 0, "log: temp file");
+	if (fd < 0) {
+		return;
+	}
+	close(fd);
+
+	/* pre-existing file already at the limit */
+	f = fopen(path, "w");
+	for (i = 1; i <= 500; i++) {
+		fprintf(f, "old %d\n", i);
+	}
+	fclose(f);
+	sim_lines = apmon_count_lines(path);
+	CHECK(sim_lines == 500, "log: pre-existing 500 lines counted");
+
+	/* first trim keeps the newest 500 and drops the oldest */
+	apmon_dedupe_init(&d);
+	sim_log(&d, path, "start", now, 500);
+	first_and_last(path, first, last, sizeof(first));
+	CHECK(apmon_count_lines(path) == 500, "log: trim at 500");
+	CHECK(strcmp(first, "old 2") == 0, "log: oldest line dropped");
+	CHECK(strcmp(last, "start") == 0, "log: newest line kept");
+
+	/* 2000 report cycles of 60 s with the same message and a config reload each cycle:
+	   lines must keep appearing and the file must stay at 500 */
+	for (cycle = 0; cycle < 2000; cycle++) {
+		now += 60;
+		sim_log(&d, path, "report accepted", now, 500);
+		sim_log(&d, path, "report accepted", now, 500);
+		if (cycle % 10 == 9) {
+			/* config reload (report_cb re-reads uci): same debuglevel, nothing extra logged,
+			   and the dedupe state must survive it */
+			sim_log(&d, path, "report accepted", now, 500);
+		}
+	}
+	first_and_last(path, first, last, sizeof(first));
+	CHECK(apmon_count_lines(path) == 500, "log: stays at max_log_entries over 2000 cycles");
+	CHECK(sim_lines == 500, "log: line counter matches file");
+	CHECK(strstr(first, "old") == NULL, "log: all pre-existing lines trimmed away");
+	CHECK(strcmp(last, "report accepted") == 0 || strncmp(last, "previous message repeated", 25) == 0,
+	      "log: recent repeated message present");
+
+	/* repeats are summarised at least every APMON_DEDUPE_SECONDS */
+	apmon_dedupe_init(&d);
+	{
+		char summary[64];
+		int written = 0;
+
+		for (i = 0; i < 100; i++) {
+			if (apmon_dedupe_check(&d, "same", (int64_t)i * 60, summary, sizeof(summary))) {
+				written++;
+			}
+		}
+		CHECK(written >= 100 * 60 / APMON_DEDUPE_SECONDS, "log: identical message not suppressed forever");
+		CHECK(strcmp(summary, "") == 0 || strncmp(summary, "previous message repeated", 25) == 0,
+		      "log: repeat summary text");
+		CHECK(apmon_dedupe_check(&d, "other", 6000, summary, sizeof(summary)) == 1,
+		      "log: different message written");
+		CHECK(strncmp(summary, "previous message repeated", 25) == 0, "log: summary before new message");
+	}
+
+	/* distinct messages (with seq) are always written */
+	apmon_dedupe_init(&d);
+	for (i = 0; i < 1200; i++) {
+		snprintf(msg, sizeof(msg), "report %d accepted", i);
+		sim_log(&d, path, msg, now + i, 500);
+	}
+	snprintf(expect, sizeof(expect), "report %d accepted", 1199);
+	first_and_last(path, first, last, sizeof(first));
+	CHECK(strcmp(last, expect) == 0, "log: newest distinct message is last");
+	CHECK(strcmp(first, "report 700 accepted") == 0, "log: oldest kept is newest-499");
+	CHECK(apmon_count_lines(path) == 500, "log: 500 after distinct messages");
+
+	/* small keep and a file without a final newline */
+	f = fopen(path, "w");
+	fprintf(f, "a\nb\nc");
+	fclose(f);
+	CHECK(apmon_trim_log(path, 2) == 2, "log: trim returns lines kept");
+	first_and_last(path, first, last, sizeof(first));
+	CHECK(strcmp(first, "b") == 0 && strcmp(last, "c") == 0, "log: trim without final newline");
+
+	unlink(path);
+}
+
 int main(void)
 {
+	test_logfile();
 	test_rfc5869();
 	test_keys(TV_DEFAULT_PASSPHRASE, TV_DEFAULT_IKM, TV_DEFAULT_K_S2C, TV_DEFAULT_K_C2S, "built-in default");
 	test_keys(TV_CHBS_PASSPHRASE, TV_CHBS_IKM, TV_CHBS_K_S2C, TV_CHBS_K_C2S, "correct horse");
