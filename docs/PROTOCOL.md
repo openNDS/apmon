@@ -2,6 +2,7 @@
 
 Status: **draft for review** (2.0.0beta). This is the protocol spoken by apmond 2.x and libapmon.
 It is a clean design: it does not interoperate with apmond 1.x or with the script apmond built into mesh11sd.
+The apmond 2.x package does **not** conflict with mesh11sd: both can be installed on the same node. On a mesh11sd node, turn off mesh11sd's built-in apmond (`uci set mesh11sd.setup.apmond_enable='0'`) so only one monitoring system runs.
 
 Key words MUST, SHOULD and MAY are used as in RFC 2119.
 
@@ -87,8 +88,8 @@ If it is unset, a built-in default passphrase is used so apmond works out of the
 
 Two standard steps, both on mbedtls primitives available in OpenWrt 25.12:
 
-1. **PBKDF2-HMAC-SHA256** (RFC 8018) stretches the passphrase, so a weak one is expensive to guess offline. mbedtls: `mbedtls_pkcs5_pbkdf2_hmac_ext()` (`MBEDTLS_PKCS5_C`, enabled in OpenWrt's libmbedtls 3.6.7).
-2. **HKDF-SHA256** (RFC 5869) derives the separate working keys. Implemented in libapmon on mbedtls HMAC-SHA256, because OpenWrt builds mbedtls with `MBEDTLS_HKDF_C` off.
+1. **PBKDF2-HMAC-SHA256** (RFC 8018) stretches the passphrase, so a weak one is expensive to guess offline. mbedtls: `mbedtls_pkcs5_pbkdf2_hmac_ext()` (`MBEDTLS_PKCS5_C`: enabled in upstream mbedtls 3.6 default config and not one of OpenWrt's configurable switches, so always on in OpenWrt's libmbedtls 3.6.7; confirmed in the 25.12.6 SDK build's mbedtls_config.h).
+2. **HKDF-SHA256** (RFC 5869) derives the separate working keys. Implemented in libapmon on mbedtls HMAC-SHA256, so it does not depend on `MBEDTLS_HKDF_C`, which is an optional OpenWrt build switch (default off in the package's Config.in).
 
 ```
 IKM   = PBKDF2-HMAC-SHA256(password = apmon_seed as raw UTF-8 bytes (no trailing newline),
@@ -103,7 +104,7 @@ All strings are ASCII without a terminator.
 | Constant | Value | Notes |
 |---|---|---|
 | PBKDF2 salt | `apmon/2 pbkdf2` | fixed protocol constant. Every node must derive the same key without any exchange, so the salt cannot be random; a per-network salt would need a second shared value. The cost of a fixed salt is that one precomputed dictionary works against every apmon network, which the iteration count only slows down |
-| PBKDF2 iterations | **50000** | fixed protocol constant, not configurable (all nodes must agree). Estimated ≈1 s on an MT7628 (MIPS 24KEc, 580 MHz): mbedtls SHA-256 there is roughly 6 MB/s, and one iteration is two 64-byte compressions. Still to be measured on the MT300N-v2 |
+| PBKDF2 iterations | **50000** | fixed protocol constant, not configurable (all nodes must agree). Estimated ≈1 s on an MT7628 (MIPS 24KEc, 580 MHz): mbedtls SHA-256 there is roughly 6 MB/s, and one iteration is two 64-byte compressions. Still to be measured on the MT300N-v2 with `apmond bench` (an x86-64 QEMU VM under software emulation took 260 ms) |
 | HKDF salt | `apmon/2 salt` | |
 
 The PBKDF2 step runs **once** at daemon start (and on reload), and the keys are kept in RAM, so the cost is not paid per message.
