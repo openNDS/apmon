@@ -219,31 +219,20 @@ int apmond_read_log(int follow)
 {
 	char path[192];
 	char reason[256];
-	char buf[4096];
+	char last[600] = "";
 	struct stat st;
-	FILE *f;
-	long offset = 0;
 	ino_t inode = 0;
+	off_t size = -1;
+	time_t mtime = 0;
 
 	if (apmond_log_path(&apmond.cfg, path, sizeof(path), reason, sizeof(reason), 0) != 0) {
 		fprintf(stderr, "%s\n", reason);
 		return 1;
 	}
 
-	f = fopen(path, "r");
-	if (f == NULL) {
+	if (apmon_log_follow(path, last, sizeof(last), stdout) < 0) {
 		fprintf(stderr, "no log file %s\n", path);
 		return 1;
-	}
-	while (fgets(buf, sizeof(buf), f) != NULL) {
-		fputs(buf, stdout);
-	}
-	offset = ftell(f);
-	fclose(f);
-	fflush(stdout);
-
-	if (stat(path, &st) == 0) {
-		inode = st.st_ino;
 	}
 
 	while (follow) {
@@ -252,46 +241,18 @@ int apmond_read_log(int follow)
 		if (stat(path, &st) != 0) {
 			continue;
 		}
-		if (st.st_ino != inode || st.st_size < offset) {
-			/* trimmed or recreated: carry on from the last line of the new file */
-			inode = st.st_ino;
-			offset = st.st_size;
-			f = fopen(path, "r");
-			if (f != NULL) {
-				long pos = st.st_size - 2;
-				int c;
-
-				while (pos > 0) {
-					fseek(f, pos, SEEK_SET);
-					c = fgetc(f);
-					if (c == '\n') {
-						break;
-					}
-					pos--;
-				}
-				if (pos > 0) {
-					offset = pos + 1;
-				} else {
-					offset = 0;
-				}
-				fclose(f);
+		if (st.st_ino == inode && st.st_size == size && st.st_mtime == mtime) {
+			/* a trim can keep the size; mtime has 1 s resolution, so look again while recent */
+			if (st.st_mtime < time(NULL) - 1) {
+				continue;
 			}
 		}
-		if (st.st_size == offset) {
-			continue;
-		}
+		inode = st.st_ino;
+		size = st.st_size;
+		mtime = st.st_mtime;
 
-		f = fopen(path, "r");
-		if (f == NULL) {
-			continue;
-		}
-		fseek(f, offset, SEEK_SET);
-		while (fgets(buf, sizeof(buf), f) != NULL) {
-			fputs(buf, stdout);
-		}
-		offset = ftell(f);
-		fclose(f);
-		fflush(stdout);
+		/* trimmed in place or appended: carry on after the last line printed */
+		apmon_log_follow(path, last, sizeof(last), stdout);
 	}
 	return 0;
 }

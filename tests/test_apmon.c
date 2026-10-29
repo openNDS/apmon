@@ -598,9 +598,77 @@ static void test_logfile(void)
 	unlink(path);
 }
 
+/* read_log -f across trims: every new line exactly once, in order, nothing lost */
+static void test_log_follow(void)
+{
+	char path[] = "/tmp/apmon-test-follow.XXXXXX";
+	char outpath[] = "/tmp/apmon-test-follow-out.XXXXXX";
+	char last[600] = "";
+	char line[128];
+	char expect[64];
+	struct apmon_dedupe d;
+	FILE *out;
+	FILE *f;
+	int fd;
+	int i;
+	int ok = 1;
+	int n;
+
+	fd = mkstemp(path);
+	close(fd);
+	fd = mkstemp(outpath);
+	close(fd);
+
+	f = fopen(path, "w");
+	for (i = 0; i < 500; i++) {
+		fprintf(f, "[%d] line\n", i);
+	}
+	fclose(f);
+	sim_lines = 500;
+
+	out = fopen(outpath, "w");
+	CHECK(apmon_log_follow(path, last, sizeof(last), out) == 500, "follow: initial print");
+	fclose(out);
+
+	/* every append trims (file stays at 500, size roughly equal); poll after each 1..3 lines */
+	out = fopen(outpath, "w");
+	apmon_dedupe_init(&d);
+	i = 500;
+	while (i < 2000) {
+		n = 1 + (i % 3);
+		while (n > 0) {
+			snprintf(line, sizeof(line), "[%d] %s", i, (i % 2) ? "a much longer line than before" : "x");
+			sim_log(&d, path, line, i, 500);
+			i++;
+			n--;
+		}
+		apmon_log_follow(path, last, sizeof(last), out);
+	}
+	fclose(out);
+	CHECK(apmon_count_lines(path) == 500, "follow: file stays at 500");
+
+	f = fopen(outpath, "r");
+	i = 500;
+	while (f != NULL && fgets(line, sizeof(line), f) != NULL) {
+		snprintf(expect, sizeof(expect), "[%d] ", i);
+		if (strncmp(line, expect, strlen(expect)) != 0) {
+			ok = 0;
+		}
+		i++;
+	}
+	if (f != NULL) {
+		fclose(f);
+	}
+	CHECK(ok && i == 2000, "follow: all 1500 lines once and in order across trims");
+
+	unlink(path);
+	unlink(outpath);
+}
+
 int main(void)
 {
 	test_logfile();
+	test_log_follow();
 	test_rfc5869();
 	test_keys(TV_DEFAULT_PASSPHRASE, TV_DEFAULT_IKM, TV_DEFAULT_K_S2C, TV_DEFAULT_K_C2S, "built-in default");
 	test_keys(TV_CHBS_PASSPHRASE, TV_CHBS_IKM, TV_CHBS_K_S2C, TV_CHBS_K_C2S, "correct horse");

@@ -7,6 +7,7 @@
 
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 
 #define APMON_MAGIC "APM2"
 #define APMON_VERSION 2
@@ -220,6 +221,7 @@ void apmon_dedupe_init(struct apmon_dedupe *d);
 int apmon_dedupe_check(struct apmon_dedupe *d, const char *msg, int64_t now_s, char *summary, size_t len);
 int apmon_count_lines(const char *path);
 int apmon_trim_log(const char *path, int keep);
+int apmon_log_follow(const char *path, char *last, size_t lastlen, FILE *out);
 
 void apmon_table_init(struct apmon_table *t, int columns);
 void apmon_table_add(struct apmon_table *t, const char *cell);
