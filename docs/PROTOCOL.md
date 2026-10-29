@@ -30,7 +30,11 @@ Confidentiality, integrity and authenticity come from AES-256-GCM over the paylo
 | Timeouts | sender: 10 s connect+response; collector: 15 s per connection, max 32 concurrent connections |
 | Other methods / paths | 405 / 404, no body |
 
-The listener binds only to the collector ULA (and optionally the LAN IPv4) — never the WAN.
+The listener is one dual-stack socket bound to `option device` (`SO_BINDTODEVICE`, default `br-lan`), so it answers on the LAN addresses (IPv4, the node ULA and `::1`) and never on the WAN.
+
+**Addresses (as apmond 1.x).** The ULA /64 is derived from `sha256(apmon_seed)`: with `id` = hex characters 9–38 of the hash, the prefix is `fd<id[9..10]>:<id[11..14]>:<id[15..18]>:<id[19..22]>::/64`. Every node adds `<prefix>:<EUI-64 of its device MAC>/64` to `option device`. The collector candidate (role `collector`, or `auto` with a default route that does not go through `option device`) claims `<prefix>::1/64`, first come wins: it waits a random 0–`claim_delay_max` s, backs off if `::1` already answers on the apmond port or if DAD fails, and takes over when `::1` has been silent for `router_takeover_misses` checks. Addresses are added and removed with rtnetlink and removed when apmond stops.
+
+Senders send to `option collector` if set, otherwise to `[<prefix>::1]:port`; if that fails they fall back to the default gateway's IPv4 address and retry the ULA every 10 reports.
 
 ### Status codes
 
@@ -111,7 +115,7 @@ The PBKDF2 step runs **once** at daemon start (and on reload), and the keys are 
 
 Separate keys per direction mean a collector reply can never be replayed to the collector as a report, even before the `type` check.
 
-`key_epoch` (uci, default 0) allows a passphrase change without a flag day: the collector MAY hold keys for the current and previous epoch (uci `accept_previous_epoch`, default off). The ULA prefix and subnet continue to be derived from `sha256(apmon_seed)` exactly as in 1.x, so addressing is unchanged; that derivation is independent of these keys.
+`key_epoch` (uci, default 0) allows a passphrase change without a flag day: with uci `prev_epoch_grace` (seconds, default 0 = off) the collector also accepts `key_epoch − 1` for that long after it starts, and answers in the epoch the sender used. Both key sets come from one PBKDF2 run. The ULA prefix and subnet continue to be derived from `sha256(apmon_seed)` exactly as in 1.x, so addressing is unchanged; that derivation is independent of these keys.
 
 ## 5. Time, replay window and nodes without a clock
 
@@ -224,11 +228,27 @@ ubus object **`apmond`** (used by luci-app-apmond and the `apmond` CLI, which be
 | `node` | `id` | the node's last full report plus collector metadata (`received`, source address) |
 | `clients` | `node`? , `include_stale`? | flattened client list with `node`, `state` (`active`/`stale`), `last_seen` |
 | `client` | `mac` | one client, with node history (last N roams) |
-| `add_block` | `name`, `data` | sender side: attach/replace an extension block in this node's reports |
-| `remove_block` | `name` | sender side |
-| `forget` | `id` | drop a node and its clients |
+| `add_block` | `name`, `data` (object), `ttl` (s, optional) | any node: attach or replace an extension block in this node's reports |
+| `remove_block` | `name` | any node: remove it |
+| `forget` | `node` (id) or `client` (mac) | collector: drop a node with its clients, or one client (a node that still reports comes back) |
 
-ubus events: `apmond.node.new`, `apmond.node.lost`, `apmond.client.roam`. ubus ACLs restrict write methods to root.
+`status` on every node also returns `role_reason`, `node_ula`, `collector_ula`, `collector_via` (sender: `ula`, `ipv4` or `config`) and the local `blocks` (name, size, seconds to expiry).
+
+**Extension blocks.** A block is a named JSON object another program puts into this node's reports, so the collector receives it with no change to apmond. Names are 1–32 characters of `a-z 0-9 _ -`; the JSON text of `data` is at most 16 KiB; at most 16 blocks per node. Blocks live in RAM only, are sent in every report under `"blocks": {"<name>": {...}}` until removed, until `ttl` seconds after they were last set, or until apmond restarts. Setting a block again replaces it (and restarts its ttl), so a program refreshing every interval with a ttl of 2–3 intervals makes its data vanish automatically if it stops. The collector shows them in `ubus call apmond node '{"id":"..."}'` under `report.blocks`. Example (a future mesh11sd):
+
+```
+ubus call apmond add_block '{"name":"mesh","data":{"peers":2,"portal":"94:83:c4:00:00:01"},"ttl":90}'
+```
+
+**ubus events** (collector), watch with `ubus listen apmond.node.new apmond.node.lost apmond.client.roam`:
+
+| Event | Data | When |
+|---|---|---|
+| `apmond.node.new` | `id`, `source` | first report from a node (also after `forget`) |
+| `apmond.node.lost` | `id`, `source` | no report for 5 intervals (once, until it reports again) |
+| `apmond.client.roam` | `mac`, `from`, `to` | a client appears in another node's report |
+
+ubus ACLs restrict write methods to root.
 
 ## 10. Security considerations
 
