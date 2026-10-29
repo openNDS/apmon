@@ -148,3 +148,4 @@ void apmon_json_int(struct apmon_json *j, const char *key, int64_t value);
 void apmon_json_double(struct apmon_json *j, const char *key, double value);
 void apmon_json_bool(struct apmon_json *j, const char *key, int value);
 void apmon_json_null(struct apmon_json *j, const char *key);
+void apmon_json_raw(struct apmon_json *j, const char *key, const char *raw);

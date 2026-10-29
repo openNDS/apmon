@@ -159,3 +159,10 @@ void apmon_json_null(struct apmon_json *j, const char *key)
 	prefix(j, key);
 	append_str(j, "null");
 }
+
+/* Insert an already-encoded JSON value (for example an array built in a second writer) */
+void apmon_json_raw(struct apmon_json *j, const char *key, const char *raw)
+{
+	prefix(j, key);
+	append_str(j, raw);
+}
