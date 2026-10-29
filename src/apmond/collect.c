@@ -430,7 +430,7 @@ static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const c
 	attr_int(find_in_table(sta, "inactive"), &inactive);
 
 	apmon_json_open_object(j, NULL);
-	apmon_json_string(j, "mac", lower);
+	apmon_json_string(j, "client_mac", lower);
 	apmon_json_string(j, "kind", "wifi");
 	apmon_json_string(j, "ap", ifname);
 	json_vlan(j, apmond_port_vlan(ifname, now_ms));
@@ -871,7 +871,7 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 		}
 
 		apmon_json_open_object(clients, NULL);
-		apmon_json_string(clients, "mac", mac);
+		apmon_json_string(clients, "client_mac", mac);
 		apmon_json_string(clients, "kind", "wired");
 		apmon_json_string(clients, "bridge", bridge);
 		apmon_json_string(clients, "port", port);

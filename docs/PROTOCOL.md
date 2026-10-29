@@ -168,12 +168,12 @@ UTF-8 JSON, one object, compact. Unknown fields MUST be ignored; missing optiona
       "aps": [ { "ifname": "phy0-ap0", "ssid": "Home", "bssid": "94:83:c4:a1:b2:c4", "vlan": null } ] }
   ],
   "clients": [
-    { "mac": "aa:bb:cc:dd:ee:ff", "kind": "wifi", "ap": "phy0-ap0", "vlan": null,
+    { "client_mac": "aa:bb:cc:dd:ee:ff", "kind": "wifi", "ap": "phy0-ap0", "vlan": null,
       "signal_avg_dbm": -58, "ack_signal_avg_dbm": -60,
       "tx_bitrate_kbps": 72200, "rx_bitrate_kbps": 65000,
       "tx_bytes": 123456, "rx_bytes": 654321, "tx_retries": 3,
       "connected_s": 1200, "inactive_ms": 1500, "last_seen": 1793270398500 },
-    { "mac": "11:22:33:44:55:66", "kind": "wired", "bridge": "br-lan", "port": "lan1", "vlan": 10,
+    { "client_mac": "11:22:33:44:55:66", "kind": "wired", "bridge": "br-lan", "port": "lan1", "vlan": 10,
       "speed_mbps": 100, "last_seen": 1793270400000 }
   ],
   "blocks": {}
@@ -184,7 +184,7 @@ UTF-8 JSON, one object, compact. Unknown fields MUST be ignored; missing optiona
 |---|---|---|
 | top | `v`, `type`, `report_time`, `node`, `clients` | `radios` omitted on wired-only nodes |
 | `node` | `id`, `apmond_version`, `uptime_s` | rest optional. Units are in the key: `_s` seconds, `_ms` milliseconds, `_kb` KiB, `_kbps` kbit/s, `_mbps` Mbit/s, `_dbm` dBm, `_mhz` MHz; `load` is three 2-decimal strings as 1.x; `last_seen`, `report_time` are Unix ms. Wi-Fi `connected_s` is iwinfo `connected_time` (seconds), `inactive_ms` is iwinfo `inactive` (ms). `ack_signal_avg_dbm` is null when the driver does not report it (mt76 on MT7628). Wired `speed_mbps` comes from `/sys/class/net/<port>/speed`, else for a swconfig VLAN interface (eg `eth0.1`) from `swconfig dev <sw> port <n> get link` of the VLAN's untagged ports, highest up port, as 1.x (cached 5 min per interface); null only if neither works. `vlan` (APs, Wi-Fi and wired clients) is the access VLAN of the bridge port: on a `vlan_filtering` bridge the port's PVID (else its only untagged VLAN) from an rtnetlink AF_BRIDGE dump (as `bridge vlan show`), so an AP with `option network lan` where lan is `br-lan.10` gets 10; on a bridge without VLAN filtering, the bridge's own `.N` or its one 802.1q port. A Wi-Fi client has its AP's VLAN, a wired client its port's. Cached 5 min (unknown ports re-checked after 30 s); null means untagged / no VLAN (no VLANs configured, a bridge without VLANs, or a trunk port); `-t` tables show `-`. `vxlan` (APs, Wi-Fi and wired clients, optional): `{"vni": N, "device": "vxlan0"}` when the port is a VXLAN device or its bridge has a VXLAN port, as mesh11sd builds its trunk (`vxlan<tun_id>` in bridge `br-tun<tun_id>`); from rtnetlink (`IFLA_INFO_KIND` vxlan, `IFLA_VXLAN_ID`), cached with the VLAN data; null when it does not apply |
-| client | `mac`, `kind` (`wifi`/`wired`), `last_seen` | `last_seen` = `report_time − inactive_ms` for Wi-Fi; for wired, the time the FDB entry was last refreshed (`report_time − fdb age`) |
+| client | `client_mac` (collectors also accept `mac` from 2.0 betas before r8), `kind` (`wifi`/`wired`), `last_seen` | `last_seen` = `report_time − inactive_ms` for Wi-Fi; for wired, the time the FDB entry was last refreshed (`report_time − fdb age`) |
 | `blocks` | — | named extension objects added by other programs via the ubus `add_block` method (e.g. a future mesh11sd `"mesh": {...}`). Each ≤ 16 KiB |
 
 **Stale clients (Rob's "last seen" tweak):** each client carries its own `last_seen`. The collector keeps a client that has dropped out of its node's report as `"state":"stale"` with its last `last_seen` until `client_stale_timeout` (uci, default 600 s) has passed, then removes it. A client seen on another node moves there immediately (roaming), keeping the newest `last_seen`.
@@ -224,13 +224,13 @@ ubus object **`apmond`** (used by luci-app-apmond and the `apmond` CLI, which be
 | Method | Args | Returns |
 |---|---|---|
 | `status` | — | role, collector address, port, version, `default_passphrase`, key epoch, counters (accepted, 401, 409, 413), node count |
-| `nodes` | — | as 1.x `show_ap_data all`: every node with its full node info and its clients nested under it, the collector first, then by hostname. Each node: `id`, every field of its report's `node` object (hostname, model, openwrt_release, apmond_version, role, uptime_s, load, free_ram_kb, free_flash_kb, cpu_*, ipv4_addresses, node_ula), the collector's view (`state` `ok`/`late`/`lost`, `age_s`, `last_report` (Unix seconds) and `last_report_date`, `source`, `reports`, `lost_reports`, `default_passphrase`, `client_count`), `radios` (with their `aps`), `blocks`, and `clients` (sorted by MAC, each as in `clients`) |
-| `node` | `id` | the same object as one entry of `nodes` |
-| `clients` | `node`? , `include_stale`? | flat list for scripts, in node order then by MAC: `node`, `node_hostname`, `state` (`active`/`stale`), `last_seen_age_s`, the client's report fields, with `last_seen` in Unix seconds (the report carries ms) plus `last_seen_date`. The `_date` fields use apmond 1.x's `date_time` format: `date` output in the router's local time with spaces as `_`, eg `Thu_Oct_29_15:47:00_GMT_2026` |
-| `client` | `mac` | one client, with node history (last N roams) |
+| `nodes` | — | as 1.x `show_ap_data all`: every node with its full node info and its clients nested under it, the collector first, then by hostname. Each node: `node_mac` (its id), every field of its report's `node` object (hostname, model, openwrt_release, apmond_version, role, uptime_s, load, free_ram_kb, free_flash_kb, cpu_*, ipv4_addresses, node_ula), the collector's view (`state` `ok`/`late`/`lost`, `age_s`, `last_report` (Unix seconds) and `last_report_date`, `source`, `reports`, `lost_reports`, `default_passphrase`, `client_count`), `radios` (with their `aps`), `blocks`, and `clients` (sorted by MAC, each as in `clients`) |
+| `node` | `node_mac` (or `id`) | the same object as one entry of `nodes` |
+| `clients` | `node_mac`? (or `node`), `include_stale`? | flat list for scripts, in node order then by MAC. Every client object, here and nested in `nodes`, starts `client_mac`, then (flat list only) `node_mac`, `node_hostname`, then `kind`, `state` (`active`/`stale`), `last_seen`, `last_seen_date`, `last_seen_age_s`, `ap` or `bridge`/`port`, `vlan`, `vxlan`, then the kind-specific stats. Clients nested under a node have no `node_mac`/`node_hostname`. `last_seen` is in Unix seconds (the report carries ms) plus `last_seen_date`. The `_date` fields use apmond 1.x's `date_time` format: `date` output in the router's local time with spaces as `_`, eg `Thu_Oct_29_15:47:00_GMT_2026` |
+| `client` | `client_mac` | one client, with node history (last N roams) |
 | `add_block` | `name`, `data` (object), `ttl` (s, optional) | any node: attach or replace an extension block in this node's reports |
 | `remove_block` | `name` | any node: remove it |
-| `forget` | `node` (id) or `client` (mac) | collector: drop a node with its clients, or one client (a node that still reports comes back) |
+| `forget` | `node_mac` (or `node`) or `client_mac` (or `client`) | collector: drop a node with its clients, or one client (a node that still reports comes back) |
 
 `status` on every node also returns `role_reason`, `node_ula`, `collector_ula`, `collector_via` (sender: `ula`, `ipv4` or `config`) and the local `blocks` (name, size, seconds to expiry).
 
@@ -246,7 +246,7 @@ ubus call apmond add_block '{"name":"mesh","data":{"peers":2,"portal":"94:83:c4:
 |---|---|---|
 | `apmond.node.new` | `id`, `source` | first report from a node (also after `forget`) |
 | `apmond.node.lost` | `id`, `source` | no report for 5 intervals (once, until it reports again) |
-| `apmond.client.roam` | `mac`, `from`, `to` | a client appears in another node's report |
+| `apmond.client.roam` | `client_mac`, `from`, `to` | a client appears in another node's report |
 
 ubus ACLs restrict write methods to root.
 

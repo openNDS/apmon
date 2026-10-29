@@ -171,11 +171,15 @@ static void clients_prune(uint64_t now_ms)
 
 static void store_client(struct node *n, struct blob_attr *table, uint64_t now_ms)
 {
-	const char *mac = table_string(table, "mac");
+	const char *mac = table_string(table, "client_mac");
 	const char *kind = table_string(table, "kind");
 	int64_t last_seen = table_int(table, "last_seen", (int64_t)now_ms);
 	struct client *c;
 
+	/* apmond 2.0 betas before r8 sent "mac" */
+	if (mac == NULL) {
+		mac = table_string(table, "mac");
+	}
 	if (mac == NULL || kind == NULL || strlen(mac) != 17) {
 		return;
 	}
@@ -206,7 +210,7 @@ static void store_client(struct node *n, struct blob_attr *table, uint64_t now_m
 		avl_insert(&clients, &c->avl);
 	} else if (strcmp(c->node, n->id) != 0 && c->node[0] != '\0') {
 		LOG_INFO_("client %s moved from %s to %s", mac, c->node, n->id);
-		send_event("apmond.client.roam", "mac", mac, "from", c->node, "to", n->id);
+		send_event("apmond.client.roam", "client_mac", mac, "from", c->node, "to", n->id);
 	}
 
 	snprintf(c->node, sizeof(c->node), "%s", n->id);
@@ -872,34 +876,60 @@ static void add_time(struct blob_buf *b, const char *name, int64_t unix_ms)
 	blobmsg_add_string(b, key, date);
 }
 
-/* One client: state, age, the node's hostname, then the client's own report fields */
-static void add_client(struct client *c, struct node *n, uint64_t now)
+/* A field of the client's report, copied as is, if present */
+static void copy_field(struct blob_attr *data, const char *name)
+{
+	struct blob_attr *cur;
+	size_t rem;
+
+	blobmsg_for_each_attr(cur, data, rem) {
+		if (strcmp(blobmsg_name(cur), name) == 0) {
+			blobmsg_add_blob(&bb, cur);
+			return;
+		}
+	}
+}
+
+/*
+ * One client: client_mac first, then (flat list only) node_mac and node_hostname, kind, state,
+ * last seen (seconds, date, age), where it is (ap, or bridge and port), vlan, vxlan, then the
+ * kind-specific stats from its report.
+ */
+static void add_client(struct client *c, struct node *n, uint64_t now, int with_node)
 {
 	struct blob_attr *cur;
 	size_t rem;
 	void *t = blobmsg_open_table(&bb, NULL);
 
-	blobmsg_add_string(&bb, "node", c->node);
-	if (n != NULL) {
-		blobmsg_add_string(&bb, "node_hostname", node_hostname(n));
+	blobmsg_add_string(&bb, "client_mac", c->mac);
+	if (with_node) {
+		blobmsg_add_string(&bb, "node_mac", c->node);
+		if (n != NULL) {
+			blobmsg_add_string(&bb, "node_hostname", node_hostname(n));
+		}
 	}
+	blobmsg_add_string(&bb, "kind", c->kind);
 	if (client_is_active(c)) {
 		blobmsg_add_string(&bb, "state", "active");
 	} else {
 		blobmsg_add_string(&bb, "state", "stale");
 	}
 	if (c->last_seen > 0) {
+		/* seconds with a date, as 1.x timestamp/date_time */
+		add_time(&bb, "last_seen", c->last_seen);
 		blobmsg_add_u32(&bb, "last_seen_age_s", (uint32_t)(age_ms(now, (uint64_t)c->last_seen) / 1000));
 	}
+	copy_field(c->data, "ap");
+	copy_field(c->data, "bridge");
+	copy_field(c->data, "port");
+	copy_field(c->data, "vlan");
+	copy_field(c->data, "vxlan");
+
 	blobmsg_for_each_attr(cur, c->data, rem) {
-		/* last_seen is shown in seconds with a date (below), as 1.x timestamp/date_time */
-		if (strcmp(blobmsg_name(cur), "last_seen") == 0) {
+		if (apmon_client_ordered_field(blobmsg_name(cur))) {
 			continue;
 		}
 		blobmsg_add_blob(&bb, cur);
-	}
-	if (c->last_seen > 0) {
-		add_time(&bb, "last_seen", c->last_seen);
 	}
 	blobmsg_close_table(&bb, t);
 }
@@ -919,7 +949,7 @@ static void add_node_fields(struct node *n, uint64_t now)
 	size_t rem;
 	void *arr;
 
-	blobmsg_add_string(&bb, "id", n->id);
+	blobmsg_add_string(&bb, "node_mac", n->id);
 	if (info != NULL) {
 		blobmsg_for_each_attr(cur, info, rem) {
 			if (strcmp(blobmsg_name(cur), "id") == 0) {
@@ -956,7 +986,7 @@ static void add_node_fields(struct node *n, uint64_t now)
 	arr = blobmsg_open_array(&bb, "clients");
 	avl_for_each_element(&clients, c, avl) {
 		if (strcmp(c->node, n->id) == 0) {
-			add_client(c, n, now);
+			add_client(c, n, now, 0);
 		}
 	}
 	blobmsg_close_array(&bb, arr);
@@ -997,11 +1027,13 @@ static int ubus_nodes(struct ubus_context *ctx, struct ubus_object *obj, struct 
 
 enum {
 	NODE_ID,
+	NODE_MAC,
 	__NODE_MAX,
 };
 
 static const struct blobmsg_policy node_policy[__NODE_MAX] = {
 	[NODE_ID] = { .name = "id", .type = BLOBMSG_TYPE_STRING },
+	[NODE_MAC] = { .name = "node_mac", .type = BLOBMSG_TYPE_STRING },
 };
 
 /* The single-node form of the nodes structure */
@@ -1016,6 +1048,9 @@ static int ubus_node(struct ubus_context *ctx, struct ubus_object *obj, struct u
 	(void)method;
 
 	blobmsg_parse(node_policy, __NODE_MAX, tb, blob_data(msg), blob_len(msg));
+	if (tb[NODE_ID] == NULL) {
+		tb[NODE_ID] = tb[NODE_MAC];
+	}
 	if (tb[NODE_ID] == NULL) {
 		return UBUS_STATUS_INVALID_ARGUMENT;
 	}
@@ -1033,12 +1068,14 @@ static int ubus_node(struct ubus_context *ctx, struct ubus_object *obj, struct u
 
 enum {
 	CLIENTS_NODE,
+	CLIENTS_NODE_MAC,
 	CLIENTS_STALE,
 	__CLIENTS_MAX,
 };
 
 static const struct blobmsg_policy clients_policy[__CLIENTS_MAX] = {
 	[CLIENTS_NODE] = { .name = "node", .type = BLOBMSG_TYPE_STRING },
+	[CLIENTS_NODE_MAC] = { .name = "node_mac", .type = BLOBMSG_TYPE_STRING },
 	[CLIENTS_STALE] = { .name = "include_stale", .type = BLOBMSG_TYPE_BOOL },
 };
 
@@ -1060,6 +1097,9 @@ static int ubus_clients(struct ubus_context *ctx, struct ubus_object *obj, struc
 	(void)method;
 
 	blobmsg_parse(clients_policy, __CLIENTS_MAX, tb, blob_data(msg), blob_len(msg));
+	if (tb[CLIENTS_NODE] == NULL) {
+		tb[CLIENTS_NODE] = tb[CLIENTS_NODE_MAC];
+	}
 	if (tb[CLIENTS_NODE] != NULL) {
 		only_node = blobmsg_get_string(tb[CLIENTS_NODE]);
 	}
@@ -1086,7 +1126,7 @@ static int ubus_clients(struct ubus_context *ctx, struct ubus_object *obj, struc
 			if (!client_is_active(c) && !include_stale) {
 				continue;
 			}
-			add_client(c, list[i], now);
+			add_client(c, list[i], now, 1);
 		}
 	}
 	blobmsg_close_array(&bb, arr);
@@ -1153,15 +1193,19 @@ static int ubus_remove_block(struct ubus_context *ctx, struct ubus_object *obj, 
 enum {
 	FORGET_NODE,
 	FORGET_CLIENT,
+	FORGET_NODE_MAC,
+	FORGET_CLIENT_MAC,
 	__FORGET_MAX,
 };
 
 static const struct blobmsg_policy forget_policy[__FORGET_MAX] = {
 	[FORGET_NODE] = { .name = "node", .type = BLOBMSG_TYPE_STRING },
 	[FORGET_CLIENT] = { .name = "client", .type = BLOBMSG_TYPE_STRING },
+	[FORGET_NODE_MAC] = { .name = "node_mac", .type = BLOBMSG_TYPE_STRING },
+	[FORGET_CLIENT_MAC] = { .name = "client_mac", .type = BLOBMSG_TYPE_STRING },
 };
 
-/* forget {"node": id}: drop the node and its clients; forget {"client": mac}: drop one client */
+/* forget {"node_mac"|"node": mac}: drop the node and its clients; forget {"client_mac"|"client": mac}: drop one client */
 static int ubus_forget(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
 		       const char *method, struct blob_attr *msg)
 {
@@ -1176,6 +1220,12 @@ static int ubus_forget(struct ubus_context *ctx, struct ubus_object *obj, struct
 
 	blobmsg_parse(forget_policy, __FORGET_MAX, tb, blob_data(msg), blob_len(msg));
 
+	if (tb[FORGET_NODE] == NULL) {
+		tb[FORGET_NODE] = tb[FORGET_NODE_MAC];
+	}
+	if (tb[FORGET_CLIENT] == NULL) {
+		tb[FORGET_CLIENT] = tb[FORGET_CLIENT_MAC];
+	}
 	if (tb[FORGET_NODE] != NULL) {
 		const char *id = blobmsg_get_string(tb[FORGET_NODE]);
 

@@ -553,7 +553,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 	value_text(field(n, "age_s"), a, sizeof(a));
 	apmon_format_age((int64_t)atoll(a), age, sizeof(age));
 	printf("=== %s  %s  %s  %s  last report %s ago\n", text_of(n, "hostname", a, sizeof(a)),
-	       text_of(n, "id", b, sizeof(b)), text_of(n, "role", c1, sizeof(c1)),
+	       text_of(n, "node_mac", b, sizeof(b)), text_of(n, "role", c1, sizeof(c1)),
 	       text_of(n, "state", d, sizeof(d)), age);
 
 	format_uptime(field(n, "uptime_s"), a, sizeof(a));
@@ -619,7 +619,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 
 	count = 0;
 	apmon_table_init(&t, 11);
-	apmon_table_add(&t, "MAC");
+	apmon_table_add(&t, "CLIENT_MAC");
 	apmon_table_add(&t, "KIND");
 	apmon_table_add(&t, "STATE");
 	apmon_table_add(&t, "LAST_SEEN");
@@ -634,7 +634,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 		blobmsg_for_each_attr(c, list, rem) {
 			struct blob_attr *conn = field(c, "connected_s");
 
-			add_field(&t, c, "mac");
+			add_field(&t, c, "client_mac");
 			add_field(&t, c, "kind");
 			add_state(&t, c, stale);
 			add_age(&t, c, "last_seen_age_s");
@@ -727,7 +727,7 @@ static int cmd_clients(const char *node)
 	memset(&b, 0, sizeof(b));
 	blob_buf_init(&b, 0);
 	if (node != NULL) {
-		blobmsg_add_string(&b, "node", node);
+		blobmsg_add_string(&b, "node_mac", node);
 	}
 	ret = call("clients", b.head, &msg);
 	blob_buf_free(&b);
@@ -744,8 +744,8 @@ static int cmd_clients(const char *node)
 	}
 
 	apmon_table_init(&t, 8);
-	apmon_table_add(&t, "MAC");
-	apmon_table_add(&t, "NODE");
+	apmon_table_add(&t, "CLIENT_MAC");
+	apmon_table_add(&t, "NODE_MAC");
 	apmon_table_add(&t, "HOSTNAME");
 	apmon_table_add(&t, "KIND");
 	apmon_table_add(&t, "STATE");
@@ -761,8 +761,8 @@ static int cmd_clients(const char *node)
 			struct blob_attr *signal = field(c, "signal_avg_dbm");
 			char text[64];
 
-			add_field(&t, c, "mac");
-			add_field(&t, c, "node");
+			add_field(&t, c, "client_mac");
+			add_field(&t, c, "node_mac");
 			add_field(&t, c, "node_hostname");
 			add_field(&t, c, "kind");
 			if (state != NULL && strcmp(blobmsg_get_string(state), "stale") == 0) {
@@ -806,7 +806,7 @@ static int cmd_node(const char *id)
 
 	memset(&b, 0, sizeof(b));
 	blob_buf_init(&b, 0);
-	blobmsg_add_string(&b, "id", id);
+	blobmsg_add_string(&b, "node_mac", id);
 	ret = show_nodes("node", b.head);
 	blob_buf_free(&b);
 	return ret;
@@ -869,13 +869,13 @@ static int cmd_forget(const char *what)
 
 	memset(&b, 0, sizeof(b));
 	blob_buf_init(&b, 0);
-	blobmsg_add_string(&b, "node", what);
+	blobmsg_add_string(&b, "node_mac", what);
 	ret = call("forget", b.head, &msg);
 
 	if (ret == UBUS_STATUS_NOT_FOUND) {
 		free(msg);
 		blob_buf_init(&b, 0);
-		blobmsg_add_string(&b, "client", what);
+		blobmsg_add_string(&b, "client_mac", what);
 		ret = call("forget", b.head, &msg);
 	}
 	blob_buf_free(&b);

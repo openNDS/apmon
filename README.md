@@ -37,10 +37,10 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
     apmond status                     this node: role and why, ULAs, collector, counters, local blocks
     apmond nodes                      collector: every node with its info, APs and clients (as 1.x show_ap_data)
     apmond clients [node]             collector: flat client list, by node then MAC (stale ones marked stale*)
-    apmond node <id>                  collector: one node, same layout as nodes
+    apmond node <node_mac>            collector: one node, same layout as nodes
     apmond block add <name> <json> [ttl]
     apmond block remove <name>
-    apmond forget <node|client>       collector: drop a node with its clients, or one client
+    apmond forget <node_mac|client_mac>  collector: drop a node with its clients, or one client
     apmond read_log [-f]              print the log; -f keeps following it
     apmond bench                      key derivation time on this hardware
     apmond run [-c confdir]           the daemon itself (started by /etc/init.d/apmond)
@@ -63,6 +63,10 @@ Example:
     === OpenWrt-f9d1  94:83:c4:2e:f9:d1  peer  ok  last report 3s ago
         ...
 
+## Field names
+
+Nodes are identified by `node_mac` and clients by `client_mac`, the first field of every client object. Clients nested under a node in `apmond nodes` / `node` are just `client_mac`, `kind`, `state`, `last_seen`, `last_seen_date`, `last_seen_age_s`, location (`ap` or `bridge`/`port`), `vlan`, `vxlan`, then their stats; the flat `apmond clients` list adds `node_mac` and `node_hostname` after `client_mac`.
+
 ## Times
 
 In collector output (`apmond nodes|node|clients` and the ubus methods) client `last_seen` and node `last_report` are Unix seconds, each with a `_date` twin in apmond 1.x's `date_time` format (router local time, spaces as `_`, eg `Thu_Oct_29_15:47:00_GMT_2026`), plus `last_seen_age_s` / `age_s`. Reports on the wire keep milliseconds.
@@ -82,4 +86,4 @@ Any program on a node can attach a JSON object to that node's reports:
     ubus call apmond add_block '{"name":"mesh","data":{"peers":2},"ttl":90}'
     ubus call apmond remove_block '{"name":"mesh"}'
 
-The collector shows it in `apmond node <id>` under `blocks.mesh` (and in `apmond nodes`). Names: 1–32 of `a-z 0-9 _ -`; data up to 16 KiB; up to 16 blocks; RAM only; `ttl` (seconds) makes a block expire unless it is set again. This is how a rewritten mesh11sd can add its mesh data without its own reporting code. See docs/PROTOCOL.md section 9.
+The collector shows it in `apmond node <node_mac>` under `blocks.mesh` (and in `apmond nodes`). Names: 1–32 of `a-z 0-9 _ -`; data up to 16 KiB; up to 16 blocks; RAM only; `ttl` (seconds) makes a block expire unless it is set again. This is how a rewritten mesh11sd can add its mesh data without its own reporting code. See docs/PROTOCOL.md section 9.

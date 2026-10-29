@@ -395,6 +395,12 @@ static void test_extra(void)
 		CHECK(strcmp(date, "Fri_Oct__9_11:47:00_GMT_2026") == 0, "date with a one digit day, as date(1)");
 	}
 
+	CHECK(apmon_client_ordered_field("client_mac"), "client_mac is written first by the collector");
+	CHECK(apmon_client_ordered_field("mac"), "pre-r8 mac is not copied again");
+	CHECK(apmon_client_ordered_field("vxlan"), "vxlan is a location field");
+	CHECK(!apmon_client_ordered_field("signal_avg_dbm"), "stats follow as reported");
+	CHECK(!apmon_client_ordered_field("speed_mbps"), "wired stats follow as reported");
+
 	apmon_format_age(12, age, sizeof(age));
 	CHECK(strcmp(age, "12s") == 0, "age 12s");
 	apmon_format_age(300, age, sizeof(age));
