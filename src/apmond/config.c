@@ -82,6 +82,11 @@ int apmond_config_load(struct apmond_config *cfg, const char *confdir)
 	cfg->client_stale_timeout = get_int(ctx, s, "client_stale_timeout", 600, 0, 86400);
 	cfg->max_message_size = get_int(ctx, s, "max_message_size", APMON_DEFAULT_MAX_MESSAGE, 4096, 4194304);
 	cfg->debuglevel = get_int(ctx, s, "debuglevel", 1, 0, 3);
+	get_string(ctx, s, "log_mountpoint", cfg->log_mountpoint, sizeof(cfg->log_mountpoint), "/tmp");
+	cfg->max_log_entries = get_int(ctx, s, "max_log_entries", 500, 10, 100000);
+	cfg->prev_epoch_grace = get_int(ctx, s, "prev_epoch_grace", 0, 0, 30 * 86400);
+	cfg->router_takeover_misses = get_int(ctx, s, "router_takeover_misses", 3, 1, 100);
+	cfg->claim_delay_max = get_int(ctx, s, "claim_delay_max", 10, 0, 60);
 
 	uci_free_context(ctx);
 	return 0;

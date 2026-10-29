@@ -256,7 +256,9 @@ static void add_addresses(struct apmon_json *j, const char *device)
 	}
 	apmon_json_close_array(j);
 
-	if (ula[0] != '\0') {
+	if (apmond.node_ula[0] != '\0') {
+		apmon_json_string(j, "node_ula", apmond.node_ula);
+	} else if (ula[0] != '\0') {
 		apmon_json_string(j, "node_ula", ula);
 	} else {
 		apmon_json_null(j, "node_ula");
@@ -416,76 +418,120 @@ static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const c
 }
 
 /* Writes "radios" and returns the Wi-Fi clients JSON fragments into clients_json */
+#define MAX_APS 16
+
+struct ap_info {
+	const char *ifname;
+	struct blob_attr *info;
+	const char *phy;
+};
+
+static const char *info_phy(struct blob_attr *info)
+{
+	struct blob_attr *phy = find_attr(info, "phy");
+
+	if (phy == NULL || blobmsg_type(phy) != BLOBMSG_TYPE_STRING) {
+		return "";
+	}
+	return blobmsg_get_string(phy);
+}
+
+/* One "radios" entry per phy, with its AP interfaces under "aps"; Wi-Fi clients go to the clients writer */
 static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *clients, uint64_t now_ms,
 		     struct wifi_macs *macs)
 {
 	struct blob_attr *devices = iwinfo_call(a, "devices", NULL);
+	struct ap_info aps[MAX_APS];
+	int count = 0;
 	struct blob_attr *list;
 	struct blob_attr *dev;
 	size_t rem;
+	int i;
+	int k;
 
 	apmon_json_open_array(j, "radios");
 
 	list = find_attr(devices, "devices");
-	if (list == NULL) {
-		apmon_json_close_array(j);
-		free(devices);
-		return;
+	if (list != NULL) {
+		blobmsg_for_each_attr(dev, list, rem) {
+			struct blob_attr *info;
+			struct blob_attr *mode;
+
+			if (blobmsg_type(dev) != BLOBMSG_TYPE_STRING || count >= MAX_APS) {
+				continue;
+			}
+			info = iwinfo_call(a, "info", blobmsg_get_string(dev));
+			mode = find_attr(info, "mode");
+			if (mode == NULL || strcmp(blobmsg_get_string(mode), "Master") != 0) {
+				free(info);
+				continue;
+			}
+			aps[count].ifname = blobmsg_get_string(dev);
+			aps[count].info = info;
+			aps[count].phy = info_phy(info);
+			count++;
+		}
 	}
 
-	blobmsg_for_each_attr(dev, list, rem) {
-		const char *ifname;
-		struct blob_attr *info;
-		struct blob_attr *mode;
+	for (i = 0; i < count; i++) {
+		int first_of_phy = 1;
+
+		for (k = 0; k < i; k++) {
+			if (strcmp(aps[k].phy, aps[i].phy) == 0) {
+				first_of_phy = 0;
+			}
+		}
+		if (!first_of_phy) {
+			continue;
+		}
+
+		apmon_json_open_object(j, NULL);
+		apmon_json_string(j, "phy", aps[i].phy);
+		json_int_attr(j, "channel", find_attr(aps[i].info, "channel"));
+		json_int_attr(j, "frequency_mhz", find_attr(aps[i].info, "frequency"));
+		json_string_attr(j, "htmode", find_attr(aps[i].info, "htmode"));
+		json_int_attr(j, "txpower_dbm", find_attr(aps[i].info, "txpower"));
+		apmon_json_open_array(j, "aps");
+
+		for (k = i; k < count; k++) {
+			if (strcmp(aps[k].phy, aps[i].phy) != 0) {
+				continue;
+			}
+			apmon_json_open_object(j, NULL);
+			apmon_json_string(j, "ifname", aps[k].ifname);
+			json_string_attr(j, "ssid", find_attr(aps[k].info, "ssid"));
+			json_string_attr(j, "bssid", find_attr(aps[k].info, "bssid"));
+			apmon_json_null(j, "vlan");
+			apmon_json_close_object(j);
+		}
+
+		apmon_json_close_array(j);
+		apmon_json_close_object(j);
+	}
+
+	for (i = 0; i < count; i++) {
 		struct blob_attr *assoc;
 		struct blob_attr *results;
 		struct blob_attr *sta;
 		size_t srem;
 
-		if (blobmsg_type(dev) != BLOBMSG_TYPE_STRING) {
-			continue;
-		}
-		ifname = blobmsg_get_string(dev);
-
-		info = iwinfo_call(a, "info", ifname);
-		mode = find_attr(info, "mode");
-		if (mode == NULL || strcmp(blobmsg_get_string(mode), "Master") != 0) {
-			free(info);
-			continue;
-		}
-
 		if (macs->if_count < 32) {
-			snprintf(macs->ifnames[macs->if_count], IFNAMSIZ, "%s", ifname);
+			snprintf(macs->ifnames[macs->if_count], IFNAMSIZ, "%s", aps[i].ifname);
 			macs->if_count++;
 		}
 
-		/* One entry per AP interface (first cut: radios are not yet grouped by phy) */
-		apmon_json_open_object(j, NULL);
-		json_string_attr(j, "phy", find_attr(info, "phy"));
-		json_int_attr(j, "channel", find_attr(info, "channel"));
-		json_int_attr(j, "frequency_mhz", find_attr(info, "frequency"));
-		json_string_attr(j, "htmode", find_attr(info, "htmode"));
-		json_int_attr(j, "txpower_dbm", find_attr(info, "txpower"));
-		apmon_json_open_array(j, "aps");
-		apmon_json_open_object(j, NULL);
-		apmon_json_string(j, "ifname", ifname);
-		json_string_attr(j, "ssid", find_attr(info, "ssid"));
-		json_string_attr(j, "bssid", find_attr(info, "bssid"));
-		apmon_json_null(j, "vlan");
-		apmon_json_close_object(j);
-		apmon_json_close_array(j);
-		apmon_json_close_object(j);
-
-		assoc = iwinfo_call(a, "assoclist", ifname);
+		assoc = iwinfo_call(a, "assoclist", aps[i].ifname);
 		results = find_attr(assoc, "results");
 		if (results != NULL) {
 			blobmsg_for_each_attr(sta, results, srem) {
-				add_wifi_client(clients, sta, ifname, now_ms, macs);
+				add_wifi_client(clients, sta, aps[i].ifname, now_ms, macs);
 			}
 		}
-
 		free(assoc);
-		free(info);
+	}
+
+	for (i = 0; i < count; i++) {
+		free(aps[i].info);
 	}
 
 	apmon_json_close_array(j);
@@ -671,8 +717,7 @@ char *apmond_build_report(struct apmond *a, uint64_t now_ms)
 		apmon_json_raw(&j, "clients", clients.buf);
 	}
 
-	apmon_json_open_object(&j, "blocks");
-	apmon_json_close_object(&j);
+	apmond_blocks_json(&j);
 	apmon_json_close_object(&j);
 
 	apmon_json_free(&clients);

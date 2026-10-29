@@ -20,49 +20,90 @@ uint64_t apmond_sender_time(void)
 	return (uint64_t)((int64_t)apmon_monotonic_ms() + apmond.clock_offset_ms);
 }
 
-static void decide_role(void)
+/*
+ * Collector candidate: role 'collector', or role 'auto' and the default route does not go through
+ * option device (this node has the upstream gateway).
+ */
+static int collector_candidate(void)
 {
 	char ifname[32];
 	char gateway[64];
-	enum apmond_role role = ROLE_UNKNOWN;
-
 
 	if (strcmp(apmond.cfg.role, "collector") == 0) {
-		role = ROLE_COLLECTOR;
-	} else if (strcmp(apmond.cfg.role, "sender") == 0) {
-		role = ROLE_SENDER;
-	} else if (apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) == 0) {
-		/* Default route through our own LAN bridge: we are an AP behind the router */
-		if (strncmp(ifname, apmond.cfg.device, strlen(apmond.cfg.device)) == 0) {
-			role = ROLE_SENDER;
-		} else {
-			role = ROLE_COLLECTOR;
-		}
+		return 1;
+	}
+	if (strcmp(apmond.cfg.role, "sender") == 0) {
+		return 0;
+	}
+	if (apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) != 0) {
+		return 0;
+	}
+	if (strncmp(ifname, apmond.cfg.device, strlen(apmond.cfg.device)) == 0) {
+		return 0;
+	}
+	return 1;
+}
+
+/*
+ * Sender target: option collector if set, else the collector ULA <prefix>:<subnet>::1,
+ * falling back to the default gateway's IPv4 address after a failed attempt (and back again).
+ */
+static void choose_collector_address(void)
+{
+	char ifname[32];
+	char gateway[64];
+
+	if (apmond.cfg.collector[0] != '\0') {
+		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.cfg.collector);
+		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "config");
+		return;
 	}
 
-	if (role == ROLE_SENDER) {
-		if (apmond.cfg.collector[0] != '\0') {
-			snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.cfg.collector);
-		} else if (apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) == 0) {
-			snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", gateway);
-		} else {
-			role = ROLE_UNKNOWN;
-		}
+	if (!apmond.ipv4_fallback && apmond.router_ula[0] != '\0') {
+		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.router_ula);
+		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ula");
+		return;
+	}
+
+	if (apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) == 0) {
+		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", gateway);
+		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ipv4");
+		return;
+	}
+
+	snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.router_ula);
+	snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ula");
+}
+
+static void decide_role(void)
+{
+	enum apmond_role role;
+	int holding;
+
+	holding = apmond_ula_tick(collector_candidate());
+
+	if (holding) {
+		role = ROLE_COLLECTOR;
+	} else {
+		role = ROLE_SENDER;
+		choose_collector_address();
 	}
 
 	if (role != apmond.role) {
 		apmond.role = role;
+		apmond.time_synced = 0;
 		if (role == ROLE_COLLECTOR) {
-			LOG_NOTICE_("role: collector, listening on port %d", apmond.cfg.port);
-		} else if (role == ROLE_SENDER) {
-			LOG_NOTICE_("role: sender, collector %s port %d", apmond.collector_addr, apmond.cfg.port);
+			LOG_NOTICE_("role: collector");
 		} else {
-			LOG_NOTICE_("role: not decided yet (no default route)");
+			LOG_NOTICE_("role: sender, collector %s port %d", apmond.collector_addr, apmond.cfg.port);
 		}
 	}
 
 	if (role == ROLE_COLLECTOR && !apmond_collector_running()) {
 		apmond_collector_start();
+	}
+	if (role != ROLE_COLLECTOR && apmond_collector_running()) {
+		apmond_collector_stop();
 	}
 }
 
@@ -122,8 +163,14 @@ static int exchange(uint8_t type, const char *plaintext, char **reply)
 		status = apmond_collector_process(type == APMON_TYPE_TIME_REQ, msg, msg_len, "local", &resp, &resp_len);
 	} else if (apmond_http_post(apmond.collector_addr, apmond.cfg.port, path, msg, msg_len, HTTP_TIMEOUT_S,
 				    &status, &resp, &resp_len) != 0) {
-		LOG_INFO_("collector %s:%d not reachable", apmond.collector_addr, apmond.cfg.port);
+		LOG_INFO_("collector %s port %d not reachable", apmond.collector_addr, apmond.cfg.port);
 		status = 0;
+		/* try the other address (ULA <-> IPv4 gateway) next time */
+		if (apmond.ipv4_fallback) {
+			apmond.ipv4_fallback = 0;
+		} else {
+			apmond.ipv4_fallback = 1;
+		}
 	}
 	free(msg);
 
@@ -227,11 +274,17 @@ static int send_report(void)
 	return status;
 }
 
+static int ipv4_successes;
+
 static void report_cb(struct uloop_timeout *t)
 {
 	int status;
 
 	decide_role();
+
+	if (apmond.role == ROLE_COLLECTOR) {
+		apmond_collector_housekeeping();
+	}
 
 	if (apmond.role != ROLE_UNKNOWN) {
 		int need_sync = !apmond.time_synced;
@@ -254,6 +307,15 @@ static void report_cb(struct uloop_timeout *t)
 			}
 
 			apmond.last_status = status;
+			if (status == 200 && apmond.ipv4_fallback) {
+				/* working over IPv4: try the ULA again every 10 reports */
+				ipv4_successes++;
+				if (ipv4_successes >= 10) {
+					ipv4_successes = 0;
+					apmond.ipv4_fallback = 0;
+				}
+			}
+
 			if (status == 200) {
 				apmond.reports_sent++;
 				apmond.last_ack_ms = apmond_sender_time();

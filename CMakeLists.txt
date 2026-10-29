@@ -33,6 +33,10 @@ if(BUILD_DAEMON)
 		src/apmond/collect.c
 		src/apmond/collector.c
 		src/apmond/http_client.c
+		src/apmond/log.c
+		src/apmond/ula.c
+		src/apmond/blocks.c
+		src/apmond/cli.c
 	)
 	target_link_libraries(apmond apmon ubox ubus uci blobmsg_json microhttpd)
 	install(TARGETS apmond RUNTIME DESTINATION sbin)

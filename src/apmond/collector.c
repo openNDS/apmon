@@ -3,6 +3,10 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <arpa/inet.h>
+#include <net/if.h>
+#include <netinet/in.h>
+#include <sys/socket.h>
+#include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -23,6 +27,7 @@ struct node {
 	uint32_t last_seq;
 	uint64_t lost;
 	int default_passphrase;
+	int lost_reported;
 };
 
 struct client {
@@ -54,10 +59,33 @@ static uint64_t count_auth;
 static uint64_t count_conflict;
 static uint64_t count_bad;
 static struct blob_buf bb;
+static struct blob_buf ev;
+static const struct apmon_keys *reply_keys;
+static int listen_fd = -1;
+
+static uint64_t age_ms(uint64_t now, uint64_t then);
+static const char *node_state(struct node *n, uint64_t now);
 
 /* ---------- store ---------- */
 
-static struct node *node_get(const char *id)
+static void send_event(const char *type, const char *key1, const char *val1, const char *key2, const char *val2,
+		       const char *key3, const char *val3)
+{
+	if (apmond.ubus == NULL) {
+		return;
+	}
+	blob_buf_init(&ev, 0);
+	blobmsg_add_string(&ev, key1, val1);
+	if (key2 != NULL) {
+		blobmsg_add_string(&ev, key2, val2);
+	}
+	if (key3 != NULL) {
+		blobmsg_add_string(&ev, key3, val3);
+	}
+	ubus_send_event(apmond.ubus, type, ev.head);
+}
+
+static struct node *node_get(const char *id, const char *source)
 {
 	struct node *n = avl_find_element(&nodes, id, n, avl);
 
@@ -72,6 +100,7 @@ static struct node *node_get(const char *id)
 	n->avl.key = n->id;
 	avl_insert(&nodes, &n->avl);
 	LOG_NOTICE_("new node %s", id);
+	send_event("apmond.node.new", "id", id, "source", source, NULL, NULL);
 	return n;
 }
 
@@ -177,6 +206,7 @@ static void store_client(struct node *n, struct blob_attr *table, uint64_t now_m
 		avl_insert(&clients, &c->avl);
 	} else if (strcmp(c->node, n->id) != 0 && c->node[0] != '\0') {
 		LOG_INFO_("client %s moved from %s to %s", mac, c->node, n->id);
+		send_event("apmond.client.roam", "mac", mac, "from", c->node, "to", n->id);
 	}
 
 	snprintf(c->node, sizeof(c->node), "%s", n->id);
@@ -205,7 +235,7 @@ static int store_report(const struct apmon_header *h, const char *json, const ch
 	}
 
 	apmon_mac_format(h->sender_id, id);
-	n = node_get(id);
+	n = node_get(id, source);
 	if (n == NULL) {
 		blob_buf_free(&b);
 		return -1;
@@ -222,6 +252,7 @@ static int store_report(const struct apmon_header *h, const char *json, const ch
 	n->last_seq = h->seq;
 	n->reports++;
 	n->received_ms = now_ms;
+	n->lost_reported = 0;
 	n->default_passphrase = (h->flags & APMON_FLAG_DEFAULT_PASSPHRASE) != 0;
 	snprintf(n->source, sizeof(n->source), "%s", source);
 	free(n->report);
@@ -257,16 +288,33 @@ static int seal_reply(uint8_t type, const char *json, uint8_t **resp, size_t *re
 	if (apmond.cfg.default_seed) {
 		h.flags = APMON_FLAG_DEFAULT_PASSPHRASE;
 	}
-	h.key_epoch = apmond.keys.epoch;
+	h.key_epoch = reply_keys->epoch;
 	memcpy(h.sender_id, apmond.id, APMON_ID_LEN);
 	h.timestamp_ms = apmon_now_ms();
 	h.seq = response_seq;
 	response_seq++;
 
-	if (apmon_seal(apmond.keys.c2s, &h, json, strlen(json), resp, resp_len) != APMON_OK) {
+	if (apmon_seal(reply_keys->c2s, &h, json, strlen(json), resp, resp_len) != APMON_OK) {
 		return -1;
 	}
 	return 0;
+}
+
+/* Keys for a message's key_epoch: the current one, or the previous one during prev_epoch_grace */
+static const struct apmon_keys *select_keys(uint32_t epoch)
+{
+	uint64_t since_start = apmon_monotonic_ms() - apmond.start_mono_ms;
+
+	if (epoch == apmond.keys.epoch) {
+		return &apmond.keys;
+	}
+	if (apmond.keys.epoch == 0 || epoch != apmond.prev_keys.epoch) {
+		return NULL;
+	}
+	if (since_start > (uint64_t)apmond.cfg.prev_epoch_grace * 1000) {
+		return NULL;
+	}
+	return &apmond.prev_keys;
 }
 
 int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const char *source,
@@ -296,12 +344,13 @@ int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const
 		count_bad++;
 		return 400;
 	}
-	if (h.key_epoch != apmond.keys.epoch) {
+	reply_keys = select_keys(h.key_epoch);
+	if (reply_keys == NULL) {
 		count_auth++;
 		return 401;
 	}
 
-	res = apmon_open(apmond.keys.s2c, body, len, &h, &pt, NULL);
+	res = apmon_open(reply_keys->s2c, body, len, &h, &pt, NULL);
 	if (res != APMON_OK) {
 		count_auth++;
 		LOG_INFO_("message from %s failed authentication (different apmon_seed?)", source);
@@ -515,6 +564,41 @@ static void mhd_timer_cb(struct uloop_timeout *t)
 	mhd_schedule();
 }
 
+/*
+ * One dual-stack TCP socket bound to option device (SO_BINDTODEVICE), so the collector answers on its
+ * LAN addresses (IPv4 and the ULAs) and not on the WAN.
+ */
+static int open_listener(void)
+{
+	struct sockaddr_in6 sa;
+	int fd;
+	int off = 0;
+	int on = 1;
+
+	fd = socket(AF_INET6, SOCK_STREAM | SOCK_CLOEXEC, 0);
+	if (fd < 0) {
+		return -1;
+	}
+	setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
+	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, apmond.cfg.device, (socklen_t)strlen(apmond.cfg.device)) != 0) {
+		LOG_ERR_("cannot bind the listener to %s", apmond.cfg.device);
+		close(fd);
+		return -1;
+	}
+
+	memset(&sa, 0, sizeof(sa));
+	sa.sin6_family = AF_INET6;
+	sa.sin6_port = htons((uint16_t)apmond.cfg.port);
+	sa.sin6_addr = in6addr_any;
+
+	if (bind(fd, (struct sockaddr *)&sa, sizeof(sa)) != 0 || listen(fd, 16) != 0) {
+		close(fd);
+		return -1;
+	}
+	return fd;
+}
+
 int apmond_collector_running(void)
 {
 	return mhd != NULL;
@@ -533,14 +617,24 @@ int apmond_collector_start(void)
 		return -1;
 	}
 
-	mhd = MHD_start_daemon(MHD_USE_EPOLL | MHD_USE_DUAL_STACK, (uint16_t)apmond.cfg.port, NULL, NULL,
+	listen_fd = open_listener();
+	if (listen_fd < 0) {
+		LOG_ERR_("could not listen on port %d on %s", apmond.cfg.port, apmond.cfg.device);
+		apmon_replay_free(&replay);
+		return -1;
+	}
+
+	mhd = MHD_start_daemon(MHD_USE_EPOLL, 0, NULL, NULL,
 			       on_request, NULL,
+			       MHD_OPTION_LISTEN_SOCKET, listen_fd,
 			       MHD_OPTION_NOTIFY_COMPLETED, on_completed, NULL,
 			       MHD_OPTION_CONNECTION_TIMEOUT, (unsigned int)15,
 			       MHD_OPTION_CONNECTION_LIMIT, (unsigned int)32,
 			       MHD_OPTION_END);
 	if (mhd == NULL) {
-		LOG_ERR_("could not listen on port %d", apmond.cfg.port);
+		LOG_ERR_("could not start the listener on port %d", apmond.cfg.port);
+		close(listen_fd);
+		listen_fd = -1;
 		apmon_replay_free(&replay);
 		return -1;
 	}
@@ -559,8 +653,45 @@ int apmond_collector_start(void)
 	mhd_timer.cb = mhd_timer_cb;
 	mhd_schedule();
 
-	LOG_NOTICE_("collector listening on port %d", apmond.cfg.port);
+	LOG_NOTICE_("collector listening on port %d (%s only)", apmond.cfg.port, apmond.cfg.device);
 	return 0;
+}
+
+void apmond_collector_stop(void)
+{
+	if (mhd == NULL) {
+		return;
+	}
+	uloop_fd_delete(&mhd_fd);
+	uloop_timeout_cancel(&mhd_timer);
+	MHD_stop_daemon(mhd);
+	mhd = NULL;
+	if (listen_fd >= 0) {
+		close(listen_fd);
+		listen_fd = -1;
+	}
+	apmon_replay_free(&replay);
+	LOG_NOTICE_("collector listener stopped");
+}
+
+/* Every report interval on the collector: lost-node events and stale client pruning */
+void apmond_collector_housekeeping(void)
+{
+	struct node *n;
+	uint64_t now = apmon_now_ms();
+
+	avl_for_each_element(&nodes, n, avl) {
+		if (n->lost_reported) {
+			continue;
+		}
+		if (strcmp(node_state(n, now), "lost") == 0) {
+			n->lost_reported = 1;
+			LOG_NOTICE_("node %s lost (no report for %llu s)", n->id,
+				    (unsigned long long)(age_ms(now, n->received_ms) / 1000));
+			send_event("apmond.node.lost", "id", n->id, "source", n->source, NULL, NULL);
+		}
+	}
+	clients_prune(now);
 }
 
 /* ---------- ubus object "apmond" ---------- */
@@ -599,10 +730,17 @@ static int ubus_status(struct ubus_context *ctx, struct ubus_object *obj, struct
 	if (apmond.role == ROLE_SENDER) {
 		blobmsg_add_string(&bb, "collector", apmond.collector_addr);
 	}
+	blobmsg_add_string(&bb, "role_reason", apmond.role_reason);
+	blobmsg_add_string(&bb, "node_ula", apmond.node_ula);
+	blobmsg_add_string(&bb, "collector_ula", apmond.router_ula);
+	if (apmond.role == ROLE_SENDER) {
+		blobmsg_add_string(&bb, "collector_via", apmond.collector_via);
+	}
 	blobmsg_add_u8(&bb, "clock_synced", (uint8_t)apmond.time_synced);
 	blobmsg_add_u64(&bb, "reports_sent", apmond.reports_sent);
 	blobmsg_add_u64(&bb, "reports_failed", apmond.reports_failed);
 	blobmsg_add_u32(&bb, "last_status", (uint32_t)apmond.last_status);
+	apmond_blocks_list(&bb);
 	if (apmond.role == ROLE_COLLECTOR) {
 		void *c = blobmsg_open_table(&bb, "collector_counters");
 
@@ -810,11 +948,132 @@ static int ubus_clients(struct ubus_context *ctx, struct ubus_object *obj, struc
 	return 0;
 }
 
+enum {
+	BLOCK_NAME,
+	BLOCK_DATA,
+	BLOCK_TTL,
+	__BLOCK_MAX,
+};
+
+static const struct blobmsg_policy add_block_policy[__BLOCK_MAX] = {
+	[BLOCK_NAME] = { .name = "name", .type = BLOBMSG_TYPE_STRING },
+	[BLOCK_DATA] = { .name = "data", .type = BLOBMSG_TYPE_TABLE },
+	[BLOCK_TTL] = { .name = "ttl", .type = BLOBMSG_TYPE_INT32 },
+};
+
+static const struct blobmsg_policy remove_block_policy[1] = {
+	[BLOCK_NAME] = { .name = "name", .type = BLOBMSG_TYPE_STRING },
+};
+
+static int ubus_add_block(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
+			  const char *method, struct blob_attr *msg)
+{
+	struct blob_attr *tb[__BLOCK_MAX];
+	int ttl = 0;
+
+	(void)ctx;
+	(void)obj;
+	(void)req;
+	(void)method;
+
+	blobmsg_parse(add_block_policy, __BLOCK_MAX, tb, blob_data(msg), blob_len(msg));
+	if (tb[BLOCK_NAME] == NULL || tb[BLOCK_DATA] == NULL) {
+		return UBUS_STATUS_INVALID_ARGUMENT;
+	}
+	if (tb[BLOCK_TTL] != NULL) {
+		ttl = (int)blobmsg_get_u32(tb[BLOCK_TTL]);
+	}
+	return apmond_block_set(blobmsg_get_string(tb[BLOCK_NAME]), tb[BLOCK_DATA], ttl);
+}
+
+static int ubus_remove_block(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
+			     const char *method, struct blob_attr *msg)
+{
+	struct blob_attr *tb[1];
+
+	(void)ctx;
+	(void)obj;
+	(void)req;
+	(void)method;
+
+	blobmsg_parse(remove_block_policy, 1, tb, blob_data(msg), blob_len(msg));
+	if (tb[BLOCK_NAME] == NULL) {
+		return UBUS_STATUS_INVALID_ARGUMENT;
+	}
+	return apmond_block_remove(blobmsg_get_string(tb[BLOCK_NAME]));
+}
+
+enum {
+	FORGET_NODE,
+	FORGET_CLIENT,
+	__FORGET_MAX,
+};
+
+static const struct blobmsg_policy forget_policy[__FORGET_MAX] = {
+	[FORGET_NODE] = { .name = "node", .type = BLOBMSG_TYPE_STRING },
+	[FORGET_CLIENT] = { .name = "client", .type = BLOBMSG_TYPE_STRING },
+};
+
+/* forget {"node": id}: drop the node and its clients; forget {"client": mac}: drop one client */
+static int ubus_forget(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
+		       const char *method, struct blob_attr *msg)
+{
+	struct blob_attr *tb[__FORGET_MAX];
+	struct client *c;
+	struct client *tmp;
+	struct node *n;
+	int removed = 0;
+
+	(void)obj;
+	(void)method;
+
+	blobmsg_parse(forget_policy, __FORGET_MAX, tb, blob_data(msg), blob_len(msg));
+
+	if (tb[FORGET_NODE] != NULL) {
+		const char *id = blobmsg_get_string(tb[FORGET_NODE]);
+
+		n = avl_find_element(&nodes, id, n, avl);
+		if (n == NULL) {
+			return UBUS_STATUS_NOT_FOUND;
+		}
+		avl_for_each_element_safe(&clients, c, avl, tmp) {
+			if (strcmp(c->node, id) == 0) {
+				client_delete(c);
+				removed++;
+			}
+		}
+		avl_delete(&nodes, &n->avl);
+		free(n->report);
+		free(n);
+		LOG_NOTICE_("node %s forgotten with %d clients", id, removed);
+	} else if (tb[FORGET_CLIENT] != NULL) {
+		const char *mac = blobmsg_get_string(tb[FORGET_CLIENT]);
+
+		c = avl_find_element(&clients, mac, c, avl);
+		if (c == NULL) {
+			return UBUS_STATUS_NOT_FOUND;
+		}
+		client_delete(c);
+		removed = 1;
+		LOG_NOTICE_("client %s forgotten", mac);
+	} else {
+		return UBUS_STATUS_INVALID_ARGUMENT;
+	}
+
+	blob_buf_init(&bb, 0);
+	blobmsg_add_u32(&bb, "removed_clients", (uint32_t)removed);
+	ubus_send_reply(ctx, req, bb.head);
+	return 0;
+}
+
 static const struct ubus_method apmond_methods[] = {
 	UBUS_METHOD_NOARG("status", ubus_status),
 	UBUS_METHOD_NOARG("nodes", ubus_nodes),
 	UBUS_METHOD("node", ubus_node, node_policy),
 	UBUS_METHOD("clients", ubus_clients, clients_policy),
+	UBUS_METHOD("add_block", ubus_add_block, add_block_policy),
+	UBUS_METHOD("remove_block", ubus_remove_block, remove_block_policy),
+	UBUS_METHOD("forget", ubus_forget, forget_policy),
 };
 
 static struct ubus_object_type apmond_object_type = UBUS_OBJECT_TYPE("apmond", apmond_methods);
