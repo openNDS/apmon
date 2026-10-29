@@ -363,6 +363,26 @@ static void test_extra(void)
 		apmon_pretty_free(&pj);
 	}
 
+	{
+		uint16_t fl[3] = { 0, APMON_BRVLAN_PVID | APMON_BRVLAN_UNTAGGED, 0 };
+		uint16_t vd[3] = { 20, 10, 30 };
+		uint16_t trunk_fl[2] = { 0, 0 };
+		uint16_t one_fl[2] = { 0, APMON_BRVLAN_UNTAGGED };
+		uint16_t two_fl[2] = { APMON_BRVLAN_UNTAGGED, APMON_BRVLAN_UNTAGGED };
+
+		CHECK(apmon_port_access_vlan(fl, vd, 3) == 10, "port VLAN: PVID wins");
+		CHECK(apmon_port_access_vlan(trunk_fl, vd, 2) == 0, "port VLAN: tagged only (trunk) is none");
+		CHECK(apmon_port_access_vlan(one_fl, vd, 2) == 10, "port VLAN: single untagged without PVID");
+		CHECK(apmon_port_access_vlan(two_fl, vd, 2) == 0, "port VLAN: two untagged is ambiguous");
+		CHECK(apmon_port_access_vlan(fl, vd, 0) == 0, "port VLAN: no entries");
+		CHECK(apmon_vlan_from_name("br-lan.10") == 10, "VLAN from name br-lan.10");
+		CHECK(apmon_vlan_from_name("eth0.20") == 20, "VLAN from name eth0.20");
+		CHECK(apmon_vlan_from_name("br-lan") == 0, "VLAN from name br-lan");
+		CHECK(apmon_vlan_from_name("phy0-ap0") == 0, "VLAN from name phy0-ap0");
+		CHECK(apmon_vlan_from_name("eth0.5000") == 0, "VLAN from name out of range");
+		CHECK(apmon_vlan_from_name("wlan0.sta1") == 0, "VLAN from name non-numeric");
+	}
+
 	apmon_format_age(12, age, sizeof(age));
 	CHECK(strcmp(age, "12s") == 0, "age 12s");
 	apmon_format_age(300, age, sizeof(age));

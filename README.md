@@ -63,6 +63,10 @@ Example:
     === OpenWrt-f9d1  94:83:c4:2e:f9:d1  peer  ok  last report 3s ago
         ...
 
+## VLANs and VXLAN
+
+Every AP and client carries `vlan`: the access VLAN of its bridge port (PVID on a `vlan_filtering` bridge, so an AP on `option network lan` with lan on `br-lan.10` shows 10; a Wi-Fi client has its AP's VLAN, a wired client its port's). `null` means untagged / no VLAN; tables show `-`. On mesh11sd nodes, where the trunk is a VXLAN (`vxlan<tun_id>` in `br-tun<tun_id>`), APs and clients on that bridge also carry `"vxlan": {"vni": N, "device": "vxlan0"}`, otherwise `null`. Both come from rtnetlink, no forks, cached 5 minutes.
+
 ## Logging
 
 As apmond 1.x: messages above `debuglevel` (0 errors, 1 notices (default), 2 info, 3 debug) are dropped and identical consecutive messages are written once. Errors and notices go to syslog and to the log file; info and debug go to the log file only. The log file is `<log_mountpoint>/apmond/apmond_log.log` (default `/tmp/apmond/apmond_log.log`), trimmed to `max_log_entries` lines (500), each line `<date> daemon.<level> apmond[<pid>]: [<n>] <message>`. A `log_mountpoint` that is not mounted disables the log file so it can't fill flash.

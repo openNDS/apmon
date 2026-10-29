@@ -459,6 +459,24 @@ static void join_array(struct blob_attr *a, const char *sep, char *out, size_t l
 	}
 }
 
+/* VXLAN column: "<vni>@<device>", or - */
+static void add_vxlan(struct apmon_table *t, struct blob_attr *table)
+{
+	struct blob_attr *vx = field(table, "vxlan");
+	char vni[16];
+	char dev[32];
+	char text[64];
+
+	if (vx == NULL || blobmsg_type(vx) != BLOBMSG_TYPE_TABLE) {
+		apmon_table_add(t, "-");
+		return;
+	}
+	value_text(field(vx, "vni"), vni, sizeof(vni));
+	value_text(field(vx, "device"), dev, sizeof(dev));
+	snprintf(text, sizeof(text), "%s@%s", vni, dev);
+	apmon_table_add(t, text);
+}
+
 static void add_kbps(struct apmon_table *t, struct blob_attr *c, const char *name)
 {
 	struct blob_attr *a = field(c, name);
@@ -561,7 +579,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 		printf("\n");
 	}
 
-	apmon_table_init(&t, 7);
+	apmon_table_init(&t, 9);
 	apmon_table_add(&t, "PHY");
 	apmon_table_add(&t, "CHANNEL");
 	apmon_table_add(&t, "MHZ");
@@ -569,6 +587,8 @@ static void print_node_block(struct blob_attr *n, int *stale)
 	apmon_table_add(&t, "AP");
 	apmon_table_add(&t, "SSID");
 	apmon_table_add(&t, "BSSID");
+	apmon_table_add(&t, "VLAN");
+	apmon_table_add(&t, "VXLAN");
 	if (radios != NULL) {
 		blobmsg_for_each_attr(r, radios, rem) {
 			struct blob_attr *aps = field(r, "aps");
@@ -585,6 +605,8 @@ static void print_node_block(struct blob_attr *n, int *stale)
 				add_field(&t, ap, "ifname");
 				add_field(&t, ap, "ssid");
 				add_field(&t, ap, "bssid");
+				add_field(&t, ap, "vlan");
+				add_vxlan(&t, ap);
 				count++;
 			}
 		}
@@ -596,12 +618,14 @@ static void print_node_block(struct blob_attr *n, int *stale)
 	apmon_table_free(&t);
 
 	count = 0;
-	apmon_table_init(&t, 9);
+	apmon_table_init(&t, 11);
 	apmon_table_add(&t, "MAC");
 	apmon_table_add(&t, "KIND");
 	apmon_table_add(&t, "STATE");
 	apmon_table_add(&t, "LAST_SEEN");
 	apmon_table_add(&t, "WHERE");
+	apmon_table_add(&t, "VLAN");
+	apmon_table_add(&t, "VXLAN");
 	apmon_table_add(&t, "SIGNAL");
 	apmon_table_add(&t, "TX");
 	apmon_table_add(&t, "RX");
@@ -615,6 +639,8 @@ static void print_node_block(struct blob_attr *n, int *stale)
 			add_state(&t, c, stale);
 			add_age(&t, c, "last_seen_age_s");
 			add_where(&t, c);
+			add_field(&t, c, "vlan");
+			add_vxlan(&t, c);
 			add_signal(&t, c);
 			if (field(c, "speed_mbps") != NULL && blobmsg_type(field(c, "speed_mbps")) == BLOBMSG_TYPE_INT32) {
 				/* wired: the link speed both ways, as 1.x */

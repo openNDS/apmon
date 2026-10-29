@@ -92,6 +92,10 @@ int apmond_ula_init(const char *passphrase);
 int apmond_ula_tick(int candidate);
 int apmond_ula_holding_router(void);
 int apmond_ula_node_ready(void);
+
+/* vlan.c */
+int apmond_port_vlan(const char *port, uint64_t now_ms);
+int apmond_port_vxlan(const char *port, uint64_t now_ms, uint32_t *vni, char *device, size_t device_len);
 void apmond_ula_cleanup(void);
 
 /* blocks.c - extension blocks carried in this node's reports */

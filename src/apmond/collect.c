@@ -375,6 +375,32 @@ static struct blob_attr *iwinfo_call(struct apmond *a, const char *method, const
 	return out;
 }
 
+/* "vlan": N, or null when the port has no access VLAN */
+static void json_vlan(struct apmon_json *j, int vid)
+{
+	if (vid > 0) {
+		apmon_json_int(j, "vlan", vid);
+	} else {
+		apmon_json_null(j, "vlan");
+	}
+}
+
+/* "vxlan": {"vni": N, "device": "vxlan0"} when the port is or shares a bridge with a vxlan device, else null */
+static void json_vxlan(struct apmon_json *j, const char *port, uint64_t now_ms)
+{
+	uint32_t vni = 0;
+	char device[IFNAMSIZ];
+
+	if (!apmond_port_vxlan(port, now_ms, &vni, device, sizeof(device))) {
+		apmon_json_null(j, "vxlan");
+		return;
+	}
+	apmon_json_open_object(j, "vxlan");
+	apmon_json_int(j, "vni", (int64_t)vni);
+	apmon_json_string(j, "device", device);
+	apmon_json_close_object(j);
+}
+
 static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const char *ifname, uint64_t now_ms,
 			    struct wifi_macs *macs)
 {
@@ -407,7 +433,8 @@ static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const c
 	apmon_json_string(j, "mac", lower);
 	apmon_json_string(j, "kind", "wifi");
 	apmon_json_string(j, "ap", ifname);
-	apmon_json_null(j, "vlan");
+	json_vlan(j, apmond_port_vlan(ifname, now_ms));
+	json_vxlan(j, ifname, now_ms);
 	json_int_attr(j, "signal_avg_dbm", find_in_table(sta, "signal_avg"));
 	json_int_attr(j, "signal_dbm", find_in_table(sta, "signal"));
 	json_int_attr(j, "ack_signal_avg_dbm", find_in_table(sta, "ack_signal_avg"));
@@ -506,7 +533,8 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 			apmon_json_string(j, "ifname", aps[k].ifname);
 			json_string_attr(j, "ssid", find_attr(aps[k].info, "ssid"));
 			json_string_attr(j, "bssid", find_attr(aps[k].info, "bssid"));
-			apmon_json_null(j, "vlan");
+			json_vlan(j, apmond_port_vlan(aps[k].ifname, now_ms));
+			json_vxlan(j, aps[k].ifname, now_ms);
 			apmon_json_close_object(j);
 		}
 
@@ -847,7 +875,8 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 		apmon_json_string(clients, "kind", "wired");
 		apmon_json_string(clients, "bridge", bridge);
 		apmon_json_string(clients, "port", port);
-		apmon_json_null(clients, "vlan");
+		json_vlan(clients, apmond_port_vlan(port, now_ms));
+		json_vxlan(clients, port, now_ms);
 
 		speed = link_speed(port, now_ms);
 		if (speed > 0) {

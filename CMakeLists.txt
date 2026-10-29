@@ -33,6 +33,7 @@ if(BUILD_DAEMON)
 		src/apmond/sender.c
 		src/apmond/collect.c
 		src/apmond/collector.c
+		src/apmond/vlan.c
 		src/apmond/http_client.c
 		src/apmond/log.c
 		src/apmond/ula.c

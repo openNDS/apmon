@@ -196,6 +196,13 @@ void apmon_pretty_double(struct apmon_pretty *p, const char *key, double value);
 void apmon_pretty_bool(struct apmon_pretty *p, const char *key, int value);
 const char *apmon_pretty_text(struct apmon_pretty *p);
 
+/* Bridge VLAN flags as in linux/if_bridge.h */
+#define APMON_BRVLAN_PVID 0x2
+#define APMON_BRVLAN_UNTAGGED 0x4
+
+int apmon_port_access_vlan(const uint16_t *flags, const uint16_t *vids, int count);
+int apmon_vlan_from_name(const char *ifname);
+
 void apmon_table_init(struct apmon_table *t, int columns);
 void apmon_table_add(struct apmon_table *t, const char *cell);
 size_t apmon_table_render(const struct apmon_table *t, char *out, size_t out_len);

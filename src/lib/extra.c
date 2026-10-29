@@ -197,3 +197,52 @@ int apmon_node_cmp(int collector_a, const char *host_a, const char *id_a, int co
 	}
 	return strcmp(id_a, id_b);
 }
+
+/*
+ * The access VLAN of a bridge port from its VLAN entries: the PVID, else the only untagged VLAN.
+ * 0 when there is none (a trunk port, or a port without VLAN entries).
+ */
+int apmon_port_access_vlan(const uint16_t *flags, const uint16_t *vids, int count)
+{
+	int untagged = 0;
+	int untagged_count = 0;
+	int i;
+
+	for (i = 0; i < count; i++) {
+		if (flags[i] & APMON_BRVLAN_PVID) {
+			return vids[i];
+		}
+	}
+	for (i = 0; i < count; i++) {
+		if (flags[i] & APMON_BRVLAN_UNTAGGED) {
+			untagged = vids[i];
+			untagged_count++;
+		}
+	}
+	if (untagged_count == 1) {
+		return untagged;
+	}
+	return 0;
+}
+
+/* VLAN id from an 802.1q or bridge VLAN device name, eg br-lan.10 -> 10, eth0.20 -> 20; 0 if none */
+int apmon_vlan_from_name(const char *ifname)
+{
+	const char *dot = strrchr(ifname, '.');
+	const char *p;
+	int vid = 0;
+
+	if (dot == NULL || dot == ifname || dot[1] == '\0') {
+		return 0;
+	}
+	for (p = dot + 1; *p != '\0'; p++) {
+		if (*p < '0' || *p > '9') {
+			return 0;
+		}
+		vid = vid * 10 + (*p - '0');
+		if (vid > 4094) {
+			return 0;
+		}
+	}
+	return vid;
+}
