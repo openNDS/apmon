@@ -167,6 +167,10 @@ int apmon_ula_prefix(const char *passphrase, uint8_t out[8]);
 void apmon_eui64_iid(const uint8_t mac[APMON_ID_LEN], uint8_t out[8]);
 int apmon_block_name_valid(const char *name);
 void apmon_format_age(int64_t seconds, char *out, size_t out_len);
+/* Node display order (1.x show_ap_data): the collector first, then hostname, then id */
+int apmon_node_cmp(int collector_a, const char *host_a, const char *id_a, int collector_b, const char *host_b,
+		   const char *id_b);
+
 void apmon_table_init(struct apmon_table *t, int columns);
 void apmon_table_add(struct apmon_table *t, const char *cell);
 size_t apmon_table_render(const struct apmon_table *t, char *out, size_t out_len);

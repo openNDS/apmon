@@ -38,7 +38,7 @@ static int collector_candidate(void)
 	if (apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) != 0) {
 		return 0;
 	}
-	if (strncmp(ifname, apmond.cfg.device, strlen(apmond.cfg.device)) == 0) {
+	if (strcmp(ifname, apmond.cfg.netdev) == 0) {
 		return 0;
 	}
 	return 1;
@@ -59,7 +59,8 @@ static void choose_collector_address(void)
 		return;
 	}
 
-	if (!apmond.ipv4_fallback && apmond.router_ula[0] != '\0') {
+	/* Until our own ULA has passed DAD it cannot be a source address: use IPv4 meanwhile */
+	if (!apmond.ipv4_fallback && apmond.router_ula[0] != '\0' && apmond_ula_node_ready()) {
 		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.router_ula);
 		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ula");
 		return;

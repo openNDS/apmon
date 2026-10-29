@@ -179,3 +179,21 @@ void apmon_table_free(struct apmon_table *t)
 	free(t->cells);
 	memset(t, 0, sizeof(*t));
 }
+
+int apmon_node_cmp(int collector_a, const char *host_a, const char *id_a, int collector_b, const char *host_b,
+		   const char *id_b)
+{
+	int ret;
+
+	if (collector_a && !collector_b) {
+		return -1;
+	}
+	if (collector_b && !collector_a) {
+		return 1;
+	}
+	ret = strcmp(host_a, host_b);
+	if (ret != 0) {
+		return ret;
+	}
+	return strcmp(id_a, id_b);
+}

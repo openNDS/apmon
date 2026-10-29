@@ -30,9 +30,9 @@ Confidentiality, integrity and authenticity come from AES-256-GCM over the paylo
 | Timeouts | sender: 10 s connect+response; collector: 15 s per connection, max 32 concurrent connections |
 | Other methods / paths | 405 / 404, no body |
 
-The listener is one dual-stack socket bound to `option device` (`SO_BINDTODEVICE`, default `br-lan`), so it answers on the LAN addresses (IPv4, the node ULA and `::1`) and never on the WAN.
+The listener is one dual-stack socket bound to the LAN network device (`SO_BINDTODEVICE`): the `l3_device` of `option interface` (default `lan`, eg `br-lan.10` on a VLAN setup), or `option netdev` if set, falling back to `option device`, so it answers on the LAN addresses (IPv4, the node ULA and `::1`) and never on the WAN.
 
-**Addresses (as apmond 1.x).** The ULA /64 is derived from `sha256(apmon_seed)`: with `id` = hex characters 9–38 of the hash, the prefix is `fd<id[9..10]>:<id[11..14]>:<id[15..18]>:<id[19..22]>::/64`. Every node adds `<prefix>:<EUI-64 of its device MAC>/64` to `option device`. The collector candidate (role `collector`, or `auto` with a default route that does not go through `option device`) claims `<prefix>::1/64`, first come wins: it waits a random 0–`claim_delay_max` s, backs off if `::1` already answers on the apmond port or if DAD fails, and takes over when `::1` has been silent for `router_takeover_misses` checks. Addresses are added and removed with rtnetlink and removed when apmond stops.
+**Addresses (as apmond 1.x).** The ULA /64 is derived from `sha256(apmon_seed)`: with `id` = hex characters 9–38 of the hash, the prefix is `fd<id[9..10]>:<id[11..14]>:<id[15..18]>:<id[19..22]>::/64`. Every node adds `<prefix>:<EUI-64 of its device MAC>/64` to that LAN network device. The collector candidate (role `collector`, or `auto` with a default route that does not go through the LAN network device) claims `<prefix>::1/64`, first come wins: it waits a random 0–`claim_delay_max` s, backs off if `::1` already answers on the apmond port or if DAD fails, and takes over when `::1` has been silent for `router_takeover_misses` checks. Addresses are added and removed with rtnetlink and removed when apmond stops.
 
 Senders send to `option collector` if set, otherwise to `[<prefix>::1]:port`; if that fails they fall back to the default gateway's IPv4 address and retry the ULA every 10 reports.
 
@@ -153,8 +153,8 @@ UTF-8 JSON, one object, compact. Unknown fields MUST be ignored; missing optiona
     "apmond_version": "2.0.0",
     "openwrt_release": "25.12.0",
     "role": "peer",
-    "uptime": 3600,
-    "load": [0.12, 0.20, 0.18],
+    "uptime_s": 3600,
+    "load": ["0.12", "0.20", "0.18"],
     "free_ram_kb": 21000,
     "free_flash_kb": 5000,
     "cpu_temperature_c": null,
@@ -172,7 +172,7 @@ UTF-8 JSON, one object, compact. Unknown fields MUST be ignored; missing optiona
       "signal_avg_dbm": -58, "ack_signal_avg_dbm": -60,
       "tx_bitrate_kbps": 72200, "rx_bitrate_kbps": 65000,
       "tx_bytes": 123456, "rx_bytes": 654321, "tx_retries": 3,
-      "connected_ms": 1200000, "inactive_ms": 1500, "last_seen": 1793270398500 },
+      "connected_s": 1200, "inactive_ms": 1500, "last_seen": 1793270398500 },
     { "mac": "11:22:33:44:55:66", "kind": "wired", "bridge": "br-lan", "port": "lan1", "vlan": 10,
       "speed_mbps": 100, "last_seen": 1793270400000 }
   ],
@@ -183,7 +183,7 @@ UTF-8 JSON, one object, compact. Unknown fields MUST be ignored; missing optiona
 | Object | Required fields | Notes |
 |---|---|---|
 | top | `v`, `type`, `report_time`, `node`, `clients` | `radios` omitted on wired-only nodes |
-| `node` | `id`, `apmond_version`, `uptime` | rest optional |
+| `node` | `id`, `apmond_version`, `uptime_s` | rest optional. Units are in the key: `_s` seconds, `_ms` milliseconds, `_kb` KiB, `_kbps` kbit/s, `_mbps` Mbit/s, `_dbm` dBm, `_mhz` MHz; `load` is three 2-decimal strings as 1.x; `last_seen`, `report_time` are Unix ms. Wi-Fi `connected_s` is iwinfo `connected_time` (seconds), `inactive_ms` is iwinfo `inactive` (ms). `ack_signal_avg_dbm` is null when the driver does not report it (mt76 on MT7628). Wired `speed_mbps` comes from `/sys/class/net/<port>/speed`, else for a swconfig VLAN interface (eg `eth0.1`) from `swconfig dev <sw> port <n> get link` of the VLAN's untagged ports, highest up port, as 1.x (cached 5 min per interface); null only if neither works |
 | client | `mac`, `kind` (`wifi`/`wired`), `last_seen` | `last_seen` = `report_time − inactive_ms` for Wi-Fi; for wired, the time the FDB entry was last refreshed (`report_time − fdb age`) |
 | `blocks` | — | named extension objects added by other programs via the ubus `add_block` method (e.g. a future mesh11sd `"mesh": {...}`). Each ≤ 16 KiB |
 
@@ -224,9 +224,9 @@ ubus object **`apmond`** (used by luci-app-apmond and the `apmond` CLI, which be
 | Method | Args | Returns |
 |---|---|---|
 | `status` | — | role, collector address, port, version, `default_passphrase`, key epoch, counters (accepted, 401, 409, 413), node count |
-| `nodes` | — | array of nodes: `id`, hostname, `last_report`, `age_s`, `state` (`ok`/`late`/`lost`), client count, `default_passphrase` |
-| `node` | `id` | the node's last full report plus collector metadata (`received`, source address) |
-| `clients` | `node`? , `include_stale`? | flattened client list with `node`, `state` (`active`/`stale`), `last_seen` |
+| `nodes` | — | as 1.x `show_ap_data all`: every node with its full node info and its clients nested under it, the collector first, then by hostname. Each node: `id`, every field of its report's `node` object (hostname, model, openwrt_release, apmond_version, role, uptime_s, load, free_ram_kb, free_flash_kb, cpu_*, ipv4_addresses, node_ula), the collector's view (`state` `ok`/`late`/`lost`, `age_s`, `last_report`, `source`, `reports`, `lost_reports`, `default_passphrase`, `client_count`), `radios` (with their `aps`), `blocks`, and `clients` (sorted by MAC, each as in `clients`) |
+| `node` | `id` | the same object as one entry of `nodes` |
+| `clients` | `node`? , `include_stale`? | flat list for scripts, in node order then by MAC: `node`, `node_hostname`, `state` (`active`/`stale`), `last_seen_age_s` and the client's report fields |
 | `client` | `mac` | one client, with node history (last N roams) |
 | `add_block` | `name`, `data` (object), `ttl` (s, optional) | any node: attach or replace an extension block in this node's reports |
 | `remove_block` | `name` | any node: remove it |

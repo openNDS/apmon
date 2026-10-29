@@ -314,11 +314,16 @@ static void add_node(struct apmond *a, struct apmon_json *j)
 	if (sysinfo(&si) == 0) {
 		double scale = 1.0 / (double)(1 << SI_LOAD_SHIFT);
 
-		apmon_json_int(j, "uptime", si.uptime);
+		char load[16];
+		int i;
+
+		apmon_json_int(j, "uptime_s", si.uptime);
+		/* as 1.x: two decimal strings, so the JSON shows 0.58, not 0.57999999999999996 */
 		apmon_json_open_array(j, "load");
-		apmon_json_double(j, NULL, (double)si.loads[0] * scale);
-		apmon_json_double(j, NULL, (double)si.loads[1] * scale);
-		apmon_json_double(j, NULL, (double)si.loads[2] * scale);
+		for (i = 0; i < 3; i++) {
+			snprintf(load, sizeof(load), "%.2f", (double)si.loads[i] * scale);
+			apmon_json_string(j, NULL, load);
+		}
 		apmon_json_close_array(j);
 		apmon_json_int(j, "free_ram_kb", (int64_t)si.freeram * si.mem_unit / 1024);
 	}
@@ -341,7 +346,7 @@ static void add_node(struct apmond *a, struct apmon_json *j)
 		apmon_json_null(j, "cpu_frequency_mhz");
 	}
 
-	add_addresses(j, a->cfg.device);
+	add_addresses(j, a->cfg.netdev);
 	apmon_json_bool(j, "default_passphrase", a->cfg.default_seed);
 	apmon_json_close_object(j);
 }
@@ -411,7 +416,7 @@ static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const c
 	json_int_attr(j, "tx_bytes", find_in_table(tx, "bytes"));
 	json_int_attr(j, "rx_bytes", find_in_table(rx, "bytes"));
 	json_int_attr(j, "tx_retries", find_in_table(tx, "retries"));
-	json_int_attr(j, "connected_ms", find_in_table(sta, "connected_time"));
+	json_int_attr(j, "connected_s", find_in_table(sta, "connected_time"));
 	apmon_json_int(j, "inactive_ms", inactive);
 	apmon_json_int(j, "last_seen", (int64_t)now_ms - inactive);
 	apmon_json_close_object(j);
@@ -600,6 +605,181 @@ static int is_wifi_mac_or_if(struct wifi_macs *macs, const char *mac, const char
 	return 0;
 }
 
+/* ---------- wired link speed ---------- */
+
+#define SPEED_CACHE_SIZE 8
+#define SPEED_CACHE_MS (300 * 1000)
+
+struct speed_cache {
+	char ifname[IFNAMSIZ];
+	int speed;
+	uint64_t at_ms;
+};
+
+static struct speed_cache speed_cache[SPEED_CACHE_SIZE];
+
+/* First line of a command's output (popen, so only for the occasional swconfig refresh) */
+static int command_output(const char *cmd, char *out, size_t len)
+{
+	FILE *p = popen(cmd, "r");
+	size_t got;
+
+	out[0] = '\0';
+	if (p == NULL) {
+		return -1;
+	}
+	got = fread(out, 1, len - 1, p);
+	out[got] = '\0';
+	pclose(p);
+	if (got == 0) {
+		return -1;
+	}
+	return 0;
+}
+
+/* VLAN id of a VLAN interface: /proc/net/vlan/<if>, else the .N suffix */
+static int vlan_id(const char *ifname)
+{
+	char path[128];
+	char line[256];
+	const char *dot;
+	FILE *f;
+	int vid = -1;
+
+	snprintf(path, sizeof(path), "/proc/net/vlan/%s", ifname);
+	f = fopen(path, "r");
+	if (f != NULL) {
+		while (fgets(line, sizeof(line), f) != NULL) {
+			char *v = strstr(line, "VID:");
+
+			if (v != NULL) {
+				vid = atoi(v + 4);
+				break;
+			}
+		}
+		fclose(f);
+	}
+	if (vid > 0) {
+		return vid;
+	}
+	dot = strrchr(ifname, '.');
+	if (dot != NULL && dot[1] >= '0' && dot[1] <= '9') {
+		vid = atoi(dot + 1);
+	}
+	return vid;
+}
+
+/*
+ * As apmond 1.x swconfig_vlan_speed: the speed of the untagged switch ports of the VLAN that are up.
+ * Several up ports (no MAC to port map without the ARL table): the highest speed.
+ */
+static int swconfig_vlan_speed(int vid)
+{
+	static char sw[32];
+	char cmd[128];
+	char ports[256];
+	char *tok;
+	char *save = NULL;
+	int best = 0;
+
+	if (access("/sbin/swconfig", X_OK) != 0) {
+		return 0;
+	}
+	if (sw[0] == '\0') {
+		char list[256];
+		char *found;
+
+		snprintf(sw, sizeof(sw), "switch0");
+		if (command_output("swconfig list 2>/dev/null", list, sizeof(list)) == 0) {
+			found = strstr(list, "Found: ");
+			if (found != NULL) {
+				sscanf(found + 7, "%31s", sw);
+			}
+		}
+	}
+
+	snprintf(cmd, sizeof(cmd), "swconfig dev %s vlan %d get ports 2>/dev/null", sw, vid);
+	if (command_output(cmd, ports, sizeof(ports)) != 0) {
+		return 0;
+	}
+
+	for (tok = strtok_r(ports, " \n", &save); tok != NULL; tok = strtok_r(NULL, " \n", &save)) {
+		char link[256];
+		char *s;
+		size_t i;
+		int tagged = 0;
+		int speed;
+
+		for (i = 0; tok[i] != '\0'; i++) {
+			if (tok[i] < '0' || tok[i] > '9') {
+				tagged = 1;
+			}
+		}
+		if (tagged) {
+			continue;
+		}
+		snprintf(cmd, sizeof(cmd), "swconfig dev %s port %s get link 2>/dev/null", sw, tok);
+		if (command_output(cmd, link, sizeof(link)) != 0) {
+			continue;
+		}
+		if (strstr(link, "link:up") == NULL) {
+			continue;
+		}
+		s = strstr(link, "speed:");
+		if (s == NULL) {
+			continue;
+		}
+		speed = atoi(s + 6);
+		if (speed > best) {
+			best = speed;
+		}
+	}
+	return best;
+}
+
+/* Mb/s of a wired port, 0 if unknown: sysfs, else swconfig (cached for 5 minutes per interface) */
+static int link_speed(const char *ifname, uint64_t now_ms)
+{
+	char path[128];
+	char text[16];
+	struct speed_cache *slot = NULL;
+	int vid;
+	int i;
+
+	if (ifname[0] == '\0') {
+		return 0;
+	}
+	snprintf(path, sizeof(path), "/sys/class/net/%s/speed", ifname);
+	if (read_line(path, text, sizeof(text)) == 0 && atoi(text) > 0) {
+		return atoi(text);
+	}
+
+	for (i = 0; i < SPEED_CACHE_SIZE; i++) {
+		if (strcmp(speed_cache[i].ifname, ifname) == 0) {
+			slot = &speed_cache[i];
+			break;
+		}
+		if (slot == NULL && speed_cache[i].ifname[0] == '\0') {
+			slot = &speed_cache[i];
+		}
+	}
+	if (slot == NULL) {
+		slot = &speed_cache[0];
+	}
+	if (strcmp(slot->ifname, ifname) == 0 && now_ms - slot->at_ms < SPEED_CACHE_MS) {
+		return slot->speed;
+	}
+
+	snprintf(slot->ifname, sizeof(slot->ifname), "%s", ifname);
+	slot->at_ms = now_ms;
+	slot->speed = 0;
+	vid = vlan_id(ifname);
+	if (vid > 0) {
+		slot->speed = swconfig_vlan_speed(vid);
+	}
+	return slot->speed;
+}
+
 static int is_wireless_port(const char *port)
 {
 	char path[128];
@@ -640,8 +820,7 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 		uint8_t id[APMON_ID_LEN];
 		char mac[18];
 		char port[IFNAMSIZ] = "";
-		char speed_path[128];
-		char speed[16];
+		int speed;
 		unsigned int port_no = ((unsigned int)e.port_hi << 8) | e.port_no;
 		int64_t age_ms = (int64_t)e.ageing_timer_value * 10;
 
@@ -670,9 +849,9 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 		apmon_json_string(clients, "port", port);
 		apmon_json_null(clients, "vlan");
 
-		snprintf(speed_path, sizeof(speed_path), "/sys/class/net/%s/speed", port);
-		if (port[0] != '\0' && read_line(speed_path, speed, sizeof(speed)) == 0 && atoi(speed) > 0) {
-			apmon_json_int(clients, "speed_mbps", atoi(speed));
+		speed = link_speed(port, now_ms);
+		if (speed > 0) {
+			apmon_json_int(clients, "speed_mbps", speed);
 		} else {
 			apmon_json_null(clients, "speed_mbps");
 		}

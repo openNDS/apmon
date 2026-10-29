@@ -9,6 +9,7 @@
  * SPDX-License-Identifier: GPL-2.0-only
  */
 #include <stdarg.h>
+#include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -38,6 +39,41 @@ static int bench(void)
 	ms = apmon_monotonic_ms() - start;
 	printf("PBKDF2-HMAC-SHA256 x %d + HKDF: %llu ms\n", APMON_PBKDF2_ITERATIONS, (unsigned long long)ms);
 	return 0;
+}
+
+/*
+ * The layer 3 device we work on (ULA addresses, listener, uplink test).
+ * option netdev wins, else the l3_device of option interface (default lan),
+ * else option device. On a VLAN setup this is eg br-lan.10, not br-lan.
+ */
+static void resolve_netdev(void)
+{
+	char object[64];
+	struct blob_attr *out;
+	struct blob_attr *cur;
+	size_t rem;
+
+	if (apmond.cfg.netdev[0] != '\0') {
+		LOG_INFO_("network device [ %s ] from option netdev", apmond.cfg.netdev);
+		return;
+	}
+	snprintf(apmond.cfg.netdev, sizeof(apmond.cfg.netdev), "%s", apmond.cfg.device);
+	snprintf(object, sizeof(object), "network.interface.%s", apmond.cfg.interface);
+	if (apmond_ubus_call(apmond.ubus, object, "status", NULL, &out) != 0) {
+		LOG_NOTICE_("interface [ %s ] not found, using device [ %s ]", apmond.cfg.interface, apmond.cfg.netdev);
+		return;
+	}
+	blob_for_each_attr(cur, out, rem) {
+		if (blobmsg_type(cur) != BLOBMSG_TYPE_STRING) {
+			continue;
+		}
+		if (strcmp(blobmsg_name(cur), "l3_device") != 0) {
+			continue;
+		}
+		snprintf(apmond.cfg.netdev, sizeof(apmond.cfg.netdev), "%s", blobmsg_get_string(cur));
+	}
+	free(out);
+	LOG_NOTICE_("interface [ %s ] is on network device [ %s ]", apmond.cfg.interface, apmond.cfg.netdev);
 }
 
 static int run_daemon(const char *confdir)
@@ -89,6 +125,7 @@ static int run_daemon(const char *confdir)
 	}
 	ubus_add_uloop(apmond.ubus);
 	apmond_ubus_init();
+	resolve_netdev();
 
 	if (apmond.cfg.default_seed) {
 		seed_warn_timer.cb = warn_default_seed;

@@ -35,9 +35,9 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
 `apmond` is also a thin ubus client of the running daemon. Output is JSON (as `ubus call` prints it); add `-t` or `--table` for aligned tables.
 
     apmond status                     this node: role and why, ULAs, collector, counters, local blocks
-    apmond nodes                      collector: every reporting node
-    apmond clients [node]             collector: clients (stale ones marked stale* in tables)
-    apmond node <id>                  collector: one node's last report
+    apmond nodes                      collector: every node with its info, APs and clients (as 1.x show_ap_data)
+    apmond clients [node]             collector: flat client list, by node then MAC (stale ones marked stale*)
+    apmond node <id>                  collector: one node, same layout as nodes
     apmond block add <name> <json> [ttl]
     apmond block remove <name>
     apmond forget <node|client>       collector: drop a node with its clients, or one client
@@ -48,9 +48,20 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
 Example:
 
     # apmond -t nodes
-    ID                 HOSTNAME  ROLE       STATE  AGE  CLIENTS  LOST  SOURCE                  PASSPHRASE
-    52:54:00:12:34:01  OpenWrt   collector  ok     4s   1        0     local                   DEFAULT
-    52:54:00:12:34:02  OpenWrt   peer       ok     5s   0        0     fd46:cfe5:34c5:6ddd::1  DEFAULT
+    === OpenWrt-6873  94:83:c4:52:68:73  collector  ok  last report 29s ago
+        model GL-MT300N-V2  release 25.12.5  apmond 2.0.0beta
+        uptime 5d 19h 12m  load 1.10 0.83 0.63  free RAM 75532 KiB  free flash 9016 KiB
+        ULA fd46:cfe5:34c5:6ddd:9683:c4ff:fe52:6873  IPv4 192.168.10.1/24
+        source local  reports 2  lost 0  passphrase DEFAULT
+      Access points
+        PHY   CHANNEL  MHZ   HTMODE  AP        SSID        BSSID
+        phy0  1        2412  HT20    phy0-ap0  House-6873  96:83:C4:52:68:73
+      Clients (1)
+        MAC                KIND   STATE   LAST_SEEN  WHERE   SIGNAL  TX          RX          CONNECTED
+        1c:86:0b:36:3f:dd  wired  active  29s        eth0.1  -       100 Mbit/s  100 Mbit/s  -
+
+    === OpenWrt-f9d1  94:83:c4:2e:f9:d1  peer  ok  last report 3s ago
+        ...
 
 ## Logging
 
@@ -63,4 +74,4 @@ Any program on a node can attach a JSON object to that node's reports:
     ubus call apmond add_block '{"name":"mesh","data":{"peers":2},"ttl":90}'
     ubus call apmond remove_block '{"name":"mesh"}'
 
-The collector shows it in `apmond node <id>` under `report.blocks.mesh`. Names: 1–32 of `a-z 0-9 _ -`; data up to 16 KiB; up to 16 blocks; RAM only; `ttl` (seconds) makes a block expire unless it is set again. This is how a rewritten mesh11sd can add its mesh data without its own reporting code. See docs/PROTOCOL.md section 9.
+The collector shows it in `apmond node <id>` under `blocks.mesh` (and in `apmond nodes`). Names: 1–32 of `a-z 0-9 _ -`; data up to 16 KiB; up to 16 blocks; RAM only; `ttl` (seconds) makes a block expire unless it is set again. This is how a rewritten mesh11sd can add its mesh data without its own reporting code. See docs/PROTOCOL.md section 9.

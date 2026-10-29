@@ -581,8 +581,8 @@ static int open_listener(void)
 	}
 	setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
 	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
-	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, apmond.cfg.device, (socklen_t)strlen(apmond.cfg.device)) != 0) {
-		LOG_ERR_("cannot bind the listener to %s", apmond.cfg.device);
+	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, apmond.cfg.netdev, (socklen_t)strlen(apmond.cfg.netdev)) != 0) {
+		LOG_ERR_("cannot bind the listener to %s", apmond.cfg.netdev);
 		close(fd);
 		return -1;
 	}
@@ -619,7 +619,7 @@ int apmond_collector_start(void)
 
 	listen_fd = open_listener();
 	if (listen_fd < 0) {
-		LOG_ERR_("could not listen on port %d on %s", apmond.cfg.port, apmond.cfg.device);
+		LOG_ERR_("could not listen on port %d on %s", apmond.cfg.port, apmond.cfg.netdev);
 		apmon_replay_free(&replay);
 		return -1;
 	}
@@ -653,7 +653,7 @@ int apmond_collector_start(void)
 	mhd_timer.cb = mhd_timer_cb;
 	mhd_schedule();
 
-	LOG_NOTICE_("collector listening on port %d (%s only)", apmond.cfg.port, apmond.cfg.device);
+	LOG_NOTICE_("collector listening on port %d (%s only)", apmond.cfg.port, apmond.cfg.netdev);
 	return 0;
 }
 
@@ -792,53 +792,185 @@ static int count_node_clients(const char *id)
 	return count;
 }
 
+/* The "node" table of a node's last report, or NULL */
+static struct blob_attr *report_part(struct node *n, const char *name)
+{
+	struct blob_attr *cur;
+	size_t rem;
+
+	if (n->report == NULL) {
+		return NULL;
+	}
+	blob_for_each_attr(cur, n->report, rem) {
+		if (strcmp(blobmsg_name(cur), name) == 0) {
+			return cur;
+		}
+	}
+	return NULL;
+}
+
+static const char *node_hostname(struct node *n)
+{
+	struct blob_attr *info = report_part(n, "node");
+	const char *host = NULL;
+
+	if (info != NULL) {
+		host = table_string(info, "hostname");
+	}
+	if (host == NULL) {
+		host = "";
+	}
+	return host;
+}
+
+static int node_is_collector(struct node *n)
+{
+	return strcmp(n->source, "local") == 0;
+}
+
+/* Display order, as 1.x show_ap_data: the collector first, then by hostname, then by id */
+static int node_order(const void *a, const void *b)
+{
+	struct node *na = *(struct node *const *)a;
+	struct node *nb = *(struct node *const *)b;
+
+	return apmon_node_cmp(node_is_collector(na), node_hostname(na), na->id, node_is_collector(nb),
+			      node_hostname(nb), nb->id);
+}
+
+/* All nodes in display order; the caller frees the array */
+static struct node **sorted_nodes(int *count)
+{
+	struct node **list;
+	struct node *n;
+	int i = 0;
+
+	*count = 0;
+	list = calloc(nodes.count + 1, sizeof(*list));
+	if (list == NULL) {
+		return NULL;
+	}
+	avl_for_each_element(&nodes, n, avl) {
+		list[i] = n;
+		i++;
+	}
+	qsort(list, (size_t)i, sizeof(*list), node_order);
+	*count = i;
+	return list;
+}
+
+/* One client: state, age, the node's hostname, then the client's own report fields */
+static void add_client(struct client *c, struct node *n, uint64_t now)
+{
+	struct blob_attr *cur;
+	size_t rem;
+	void *t = blobmsg_open_table(&bb, NULL);
+
+	blobmsg_add_string(&bb, "node", c->node);
+	if (n != NULL) {
+		blobmsg_add_string(&bb, "node_hostname", node_hostname(n));
+	}
+	if (client_is_active(c)) {
+		blobmsg_add_string(&bb, "state", "active");
+	} else {
+		blobmsg_add_string(&bb, "state", "stale");
+	}
+	if (c->last_seen > 0) {
+		blobmsg_add_u32(&bb, "last_seen_age_s", (uint32_t)(age_ms(now, (uint64_t)c->last_seen) / 1000));
+	}
+	blobmsg_for_each_attr(cur, c->data, rem) {
+		blobmsg_add_blob(&bb, cur);
+	}
+	blobmsg_close_table(&bb, t);
+}
+
+/*
+ * One node with everything it reported (as 1.x node_status: hostname, model, release, version,
+ * uptime, load, memory, node_ula, ipv4_addresses), the collector's view of it (state, age,
+ * source, counters), its radios/APs, blocks and its clients nested under it, sorted by MAC.
+ */
+static void add_node_fields(struct node *n, uint64_t now)
+{
+	struct blob_attr *info = report_part(n, "node");
+	struct blob_attr *radios = report_part(n, "radios");
+	struct blob_attr *blocks = report_part(n, "blocks");
+	struct blob_attr *cur;
+	struct client *c;
+	size_t rem;
+	void *arr;
+
+	blobmsg_add_string(&bb, "id", n->id);
+	if (info != NULL) {
+		blobmsg_for_each_attr(cur, info, rem) {
+			if (strcmp(blobmsg_name(cur), "id") == 0) {
+				continue;
+			}
+			if (strcmp(blobmsg_name(cur), "default_passphrase") == 0) {
+				continue;
+			}
+			blobmsg_add_blob(&bb, cur);
+		}
+	}
+	blobmsg_add_string(&bb, "state", node_state(n, now));
+	blobmsg_add_u32(&bb, "age_s", (uint32_t)(age_ms(now, n->received_ms) / 1000));
+	blobmsg_add_u64(&bb, "last_report", n->received_ms);
+	blobmsg_add_string(&bb, "source", n->source);
+	blobmsg_add_u64(&bb, "reports", n->reports);
+	blobmsg_add_u64(&bb, "lost_reports", n->lost);
+	blobmsg_add_u8(&bb, "default_passphrase", (uint8_t)n->default_passphrase);
+	blobmsg_add_u32(&bb, "client_count", (uint32_t)count_node_clients(n->id));
+
+	if (radios != NULL) {
+		blobmsg_add_blob(&bb, radios);
+	} else {
+		arr = blobmsg_open_array(&bb, "radios");
+		blobmsg_close_array(&bb, arr);
+	}
+	if (blocks != NULL) {
+		blobmsg_add_blob(&bb, blocks);
+	} else {
+		arr = blobmsg_open_table(&bb, "blocks");
+		blobmsg_close_table(&bb, arr);
+	}
+
+	arr = blobmsg_open_array(&bb, "clients");
+	avl_for_each_element(&clients, c, avl) {
+		if (strcmp(c->node, n->id) == 0) {
+			add_client(c, n, now);
+		}
+	}
+	blobmsg_close_array(&bb, arr);
+}
+
 static int ubus_nodes(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
 		      const char *method, struct blob_attr *msg)
 {
-	struct node *n;
+	struct node **list;
 	uint64_t now = apmon_now_ms();
+	int count;
+	int i;
 	void *arr;
 
 	(void)obj;
 	(void)method;
 	(void)msg;
 
+	clients_prune(now);
+	list = sorted_nodes(&count);
+	if (list == NULL) {
+		return UBUS_STATUS_UNKNOWN_ERROR;
+	}
+
 	blob_buf_init(&bb, 0);
 	arr = blobmsg_open_array(&bb, "nodes");
-	avl_for_each_element(&nodes, n, avl) {
+	for (i = 0; i < count; i++) {
 		void *t = blobmsg_open_table(&bb, NULL);
-		struct blob_attr *cur;
-		size_t rem;
 
-		blobmsg_add_string(&bb, "id", n->id);
-		blob_for_each_attr(cur, n->report, rem) {
-			const char *host;
-			const char *role;
-
-			if (strcmp(blobmsg_name(cur), "node") != 0) {
-				continue;
-			}
-			host = table_string(cur, "hostname");
-			role = table_string(cur, "role");
-
-			if (host != NULL) {
-				blobmsg_add_string(&bb, "hostname", host);
-			}
-			if (role != NULL) {
-				blobmsg_add_string(&bb, "role", role);
-			}
-		}
-		blobmsg_add_string(&bb, "source", n->source);
-		blobmsg_add_u64(&bb, "last_report", n->received_ms);
-		blobmsg_add_u32(&bb, "age_s", (uint32_t)(age_ms(now, n->received_ms) / 1000));
-		blobmsg_add_string(&bb, "state", node_state(n, now));
-		blobmsg_add_u64(&bb, "reports", n->reports);
-		blobmsg_add_u64(&bb, "lost_reports", n->lost);
-		blobmsg_add_u32(&bb, "clients", (uint32_t)count_node_clients(n->id));
-		blobmsg_add_u8(&bb, "default_passphrase", (uint8_t)n->default_passphrase);
+		add_node_fields(list[i], now);
 		blobmsg_close_table(&bb, t);
 	}
 	blobmsg_close_array(&bb, arr);
+	free(list);
 	ubus_send_reply(ctx, req, bb.head);
 	return 0;
 }
@@ -852,11 +984,13 @@ static const struct blobmsg_policy node_policy[__NODE_MAX] = {
 	[NODE_ID] = { .name = "id", .type = BLOBMSG_TYPE_STRING },
 };
 
+/* The single-node form of the nodes structure */
 static int ubus_node(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
 		     const char *method, struct blob_attr *msg)
 {
 	struct blob_attr *tb[__NODE_MAX];
 	struct node *n;
+	uint64_t now = apmon_now_ms();
 
 	(void)obj;
 	(void)method;
@@ -870,11 +1004,9 @@ static int ubus_node(struct ubus_context *ctx, struct ubus_object *obj, struct u
 		return UBUS_STATUS_NOT_FOUND;
 	}
 
+	clients_prune(now);
 	blob_buf_init(&bb, 0);
-	blobmsg_add_string(&bb, "id", n->id);
-	blobmsg_add_string(&bb, "source", n->source);
-	blobmsg_add_u64(&bb, "received", n->received_ms);
-	blobmsg_add_field(&bb, BLOBMSG_TYPE_TABLE, "report", blob_data(n->report), blob_len(n->report));
+	add_node_fields(n, now);
 	ubus_send_reply(ctx, req, bb.head);
 	return 0;
 }
@@ -890,14 +1022,18 @@ static const struct blobmsg_policy clients_policy[__CLIENTS_MAX] = {
 	[CLIENTS_STALE] = { .name = "include_stale", .type = BLOBMSG_TYPE_BOOL },
 };
 
+/* Flat list for scripts, in node display order and then by MAC */
 static int ubus_clients(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
 			const char *method, struct blob_attr *msg)
 {
 	struct blob_attr *tb[__CLIENTS_MAX];
 	const char *only_node = NULL;
 	int include_stale = 1;
+	struct node **list;
 	struct client *c;
 	uint64_t now = apmon_now_ms();
+	int count;
+	int i;
 	void *arr;
 
 	(void)obj;
@@ -912,38 +1048,29 @@ static int ubus_clients(struct ubus_context *ctx, struct ubus_object *obj, struc
 	}
 
 	clients_prune(now);
+	list = sorted_nodes(&count);
+	if (list == NULL) {
+		return UBUS_STATUS_UNKNOWN_ERROR;
+	}
 
 	blob_buf_init(&bb, 0);
 	arr = blobmsg_open_array(&bb, "clients");
-	avl_for_each_element(&clients, c, avl) {
-		int active = client_is_active(c);
-		struct blob_attr *cur;
-		size_t rem;
-		void *t;
-
-		if (only_node != NULL && strcmp(only_node, c->node) != 0) {
+	for (i = 0; i < count; i++) {
+		if (only_node != NULL && strcmp(only_node, list[i]->id) != 0) {
 			continue;
 		}
-		if (!active && !include_stale) {
-			continue;
+		avl_for_each_element(&clients, c, avl) {
+			if (strcmp(c->node, list[i]->id) != 0) {
+				continue;
+			}
+			if (!client_is_active(c) && !include_stale) {
+				continue;
+			}
+			add_client(c, list[i], now);
 		}
-
-		t = blobmsg_open_table(&bb, NULL);
-		blobmsg_add_string(&bb, "node", c->node);
-		if (active) {
-			blobmsg_add_string(&bb, "state", "active");
-		} else {
-			blobmsg_add_string(&bb, "state", "stale");
-		}
-		if (c->last_seen > 0) {
-			blobmsg_add_u32(&bb, "last_seen_age_s", (uint32_t)(age_ms(now, (uint64_t)c->last_seen) / 1000));
-		}
-		blobmsg_for_each_attr(cur, c->data, rem) {
-			blobmsg_add_blob(&bb, cur);
-		}
-		blobmsg_close_table(&bb, t);
 	}
 	blobmsg_close_array(&bb, arr);
+	free(list);
 	ubus_send_reply(ctx, req, bb.head);
 	return 0;
 }

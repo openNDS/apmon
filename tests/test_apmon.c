@@ -292,6 +292,11 @@ static void test_extra(void)
 	CHECK(!apmon_block_name_valid("abcdefghijklmnopqrstuvwxyz0123456"), "33 character block name invalid");
 	CHECK(apmon_block_name_valid("abcdefghijklmnopqrstuvwxyz012345"), "32 character block name valid");
 
+	CHECK(apmon_node_cmp(1, "zz", "b", 0, "aa", "a") < 0, "collector sorts first");
+	CHECK(apmon_node_cmp(0, "aa", "b", 1, "zz", "a") > 0, "collector sorts first (reversed)");
+	CHECK(apmon_node_cmp(0, "ap-1", "b", 0, "ap-2", "a") < 0, "nodes sort by hostname");
+	CHECK(apmon_node_cmp(0, "ap", "a", 0, "ap", "b") < 0, "same hostname sorts by id");
+
 	apmon_format_age(12, age, sizeof(age));
 	CHECK(strcmp(age, "12s") == 0, "age 12s");
 	apmon_format_age(300, age, sizeof(age));

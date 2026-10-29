@@ -131,7 +131,7 @@ static int addr_flags(const struct in6_addr *addr)
 		if (sscanf(line, "%32s %x %x %x %x %16s", hex, &ifindex, &plen, &scope, &fl, name) != 6) {
 			continue;
 		}
-		if (strcmp(hex, want) == 0 && strcmp(name, apmond.cfg.device) == 0) {
+		if (strcmp(hex, want) == 0 && strcmp(name, apmond.cfg.netdev) == 0) {
 			flags = (int)fl;
 			break;
 		}
@@ -148,35 +148,35 @@ static void addr_text(const struct in6_addr *addr, char *out, size_t len)
 static int add_address(const struct in6_addr *addr)
 {
 	char text[INET6_ADDRSTRLEN];
-	int ifindex = (int)if_nametoindex(apmond.cfg.device);
+	int ifindex = (int)if_nametoindex(apmond.cfg.netdev);
 
 	addr_text(addr, text, sizeof(text));
 	if (ifindex == 0) {
-		LOG_ERR_("device [ %s ] not found, cannot assign ULA addresses", apmond.cfg.device);
+		LOG_ERR_("device [ %s ] not found, cannot assign ULA addresses", apmond.cfg.netdev);
 		return -1;
 	}
 	if (addr_flags(addr) >= 0) {
 		return 0;
 	}
 	if (addr_change(1, addr, ifindex) != 0) {
-		LOG_ERR_("failed to add ULA address %s/64 to %s", text, apmond.cfg.device);
+		LOG_ERR_("failed to add ULA address %s/64 to %s", text, apmond.cfg.netdev);
 		return -1;
 	}
-	LOG_NOTICE_("ULA address %s/64 added to %s", text, apmond.cfg.device);
+	LOG_NOTICE_("ULA address %s/64 added to %s", text, apmond.cfg.netdev);
 	return 0;
 }
 
 static void del_address(const struct in6_addr *addr)
 {
 	char text[INET6_ADDRSTRLEN];
-	int ifindex = (int)if_nametoindex(apmond.cfg.device);
+	int ifindex = (int)if_nametoindex(apmond.cfg.netdev);
 
 	if (ifindex == 0 || addr_flags(addr) < 0) {
 		return;
 	}
 	addr_text(addr, text, sizeof(text));
 	if (addr_change(0, addr, ifindex) == 0) {
-		LOG_NOTICE_("ULA address %s/64 deleted from %s", text, apmond.cfg.device);
+		LOG_NOTICE_("ULA address %s/64 deleted from %s", text, apmond.cfg.netdev);
 	}
 }
 
@@ -369,6 +369,18 @@ int apmond_ula_holding_router(void)
 		return 0;
 	}
 	flags = addr_flags(&router_addr);
+	return flags >= 0 && (flags & (IFA_DADFAILED | IFA_TENTATIVE)) == 0;
+}
+
+/* Our node ULA is present and past DAD, so it can be used as a source address */
+int apmond_ula_node_ready(void)
+{
+	int flags;
+
+	if (!have_prefix) {
+		return 0;
+	}
+	flags = addr_flags(&node_addr);
 	return flags >= 0 && (flags & (IFA_DADFAILED | IFA_TENTATIVE)) == 0;
 }
 

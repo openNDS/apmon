@@ -75,6 +75,8 @@ int apmond_config_load(struct apmond_config *cfg, const char *confdir)
 	cfg->interval = get_int(ctx, s, "interval", 30, 10, 3600);
 	cfg->startup_delay = get_int(ctx, s, "startup_delay", 10, 0, 3600);
 	get_string(ctx, s, "device", cfg->device, sizeof(cfg->device), "br-lan");
+	get_string(ctx, s, "interface", cfg->interface, sizeof(cfg->interface), "lan");
+	get_string(ctx, s, "netdev", cfg->netdev, sizeof(cfg->netdev), "");
 	get_string(ctx, s, "apmon_seed", cfg->seed, sizeof(cfg->seed), APMOND_DEFAULT_SEED);
 	cfg->default_seed = strcmp(cfg->seed, APMOND_DEFAULT_SEED) == 0;
 	cfg->key_epoch = (uint32_t)get_int(ctx, s, "key_epoch", 0, 0, 0x7fffffff);

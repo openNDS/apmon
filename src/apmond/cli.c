@@ -297,17 +297,295 @@ static int show_key_values(const char *method, struct blob_attr *args, const cha
 	return 0;
 }
 
-static int cmd_nodes(void)
+static void print_table_indented(struct apmon_table *t, const char *indent)
+{
+	char *buf = malloc(TABLE_BUF);
+	char *line;
+	char *next;
+
+	if (buf == NULL) {
+		return;
+	}
+	buf[0] = '\0';
+	apmon_table_render(t, buf, TABLE_BUF);
+	line = buf;
+	while (*line != '\0') {
+		next = strchr(line, '\n');
+		if (next != NULL) {
+			*next = '\0';
+		}
+		printf("%s%s\n", indent, line);
+		if (next == NULL) {
+			break;
+		}
+		line = next + 1;
+	}
+	free(buf);
+}
+
+static const char *text_of(struct blob_attr *table, const char *name, char *buf, size_t len)
+{
+	value_text(field(table, name), buf, len);
+	return buf;
+}
+
+static void format_uptime(struct blob_attr *a, char *out, size_t len)
+{
+	long long s;
+	long long d;
+	long long h;
+	long long m;
+
+	if (a == NULL) {
+		snprintf(out, len, "-");
+		return;
+	}
+	if (blobmsg_type(a) == BLOBMSG_TYPE_INT64) {
+		s = (long long)blobmsg_get_u64(a);
+	} else if (blobmsg_type(a) == BLOBMSG_TYPE_INT32) {
+		s = (long long)blobmsg_get_u32(a);
+	} else {
+		snprintf(out, len, "-");
+		return;
+	}
+	d = s / 86400;
+	h = (s / 3600) % 24;
+	m = (s / 60) % 60;
+	if (d > 0) {
+		snprintf(out, len, "%lldd %lldh %lldm", d, h, m);
+	} else if (h > 0) {
+		snprintf(out, len, "%lldh %lldm", h, m);
+	} else {
+		snprintf(out, len, "%lldm %llds", m, s % 60);
+	}
+}
+
+/* "a, b, c" from an array of strings or numbers */
+static void join_array(struct blob_attr *a, const char *sep, char *out, size_t len)
+{
+	struct blob_attr *cur;
+	size_t rem;
+	size_t used = 0;
+	int first = 1;
+
+	out[0] = '\0';
+	if (a == NULL || blobmsg_type(a) != BLOBMSG_TYPE_ARRAY) {
+		snprintf(out, len, "-");
+		return;
+	}
+	blobmsg_for_each_attr(cur, a, rem) {
+		char text[64];
+		int n;
+
+		value_text(cur, text, sizeof(text));
+		if (first) {
+			n = snprintf(out + used, len - used, "%s", text);
+		} else {
+			n = snprintf(out + used, len - used, "%s%s", sep, text);
+		}
+		if (n < 0 || (size_t)n >= len - used) {
+			break;
+		}
+		used += (size_t)n;
+		first = 0;
+	}
+	if (first) {
+		snprintf(out, len, "-");
+	}
+}
+
+static void add_kbps(struct apmon_table *t, struct blob_attr *c, const char *name)
+{
+	struct blob_attr *a = field(c, name);
+	char text[32];
+
+	if (a == NULL || blobmsg_type(a) != BLOBMSG_TYPE_INT32) {
+		apmon_table_add(t, "-");
+		return;
+	}
+	snprintf(text, sizeof(text), "%.1f Mbit/s", (double)(int32_t)blobmsg_get_u32(a) / 1000.0);
+	apmon_table_add(t, text);
+}
+
+static void add_signal(struct apmon_table *t, struct blob_attr *c)
+{
+	struct blob_attr *signal = field(c, "signal_avg_dbm");
+	char text[32];
+
+	if (signal == NULL || blobmsg_type(signal) != BLOBMSG_TYPE_INT32) {
+		signal = field(c, "signal_dbm");
+	}
+	if (signal != NULL && blobmsg_type(signal) == BLOBMSG_TYPE_INT32) {
+		snprintf(text, sizeof(text), "%d dBm", (int32_t)blobmsg_get_u32(signal));
+	} else {
+		snprintf(text, sizeof(text), "-");
+	}
+	apmon_table_add(t, text);
+}
+
+static void add_where(struct apmon_table *t, struct blob_attr *c)
+{
+	struct blob_attr *where = field(c, "ap");
+	char text[64];
+
+	if (where == NULL || blobmsg_type(where) != BLOBMSG_TYPE_STRING) {
+		where = field(c, "port");
+	}
+	value_text(where, text, sizeof(text));
+	apmon_table_add(t, text);
+}
+
+static void add_state(struct apmon_table *t, struct blob_attr *c, int *stale)
+{
+	struct blob_attr *state = field(c, "state");
+
+	if (state != NULL && strcmp(blobmsg_get_string(state), "stale") == 0) {
+		apmon_table_add(t, "stale*");
+		*stale = *stale + 1;
+	} else {
+		apmon_table_add(t, "active");
+	}
+}
+
+/* One node as 1.x show_ap_data: a header block, then its APs and its clients */
+static void print_node_block(struct blob_attr *n, int *stale)
+{
+	struct blob_attr *radios = field(n, "radios");
+	struct blob_attr *list = field(n, "clients");
+	struct blob_attr *blocks = field(n, "blocks");
+	struct blob_attr *def = field(n, "default_passphrase");
+	struct blob_attr *r;
+	struct blob_attr *c;
+	struct apmon_table t;
+	char a[64];
+	char b[64];
+	char c1[64];
+	char d[64];
+	char e[160];
+	char age[16];
+	size_t rem;
+	size_t rem2;
+	int count = 0;
+
+	value_text(field(n, "age_s"), a, sizeof(a));
+	apmon_format_age((int64_t)atoll(a), age, sizeof(age));
+	printf("=== %s  %s  %s  %s  last report %s ago\n", text_of(n, "hostname", a, sizeof(a)),
+	       text_of(n, "id", b, sizeof(b)), text_of(n, "role", c1, sizeof(c1)),
+	       text_of(n, "state", d, sizeof(d)), age);
+
+	format_uptime(field(n, "uptime_s"), a, sizeof(a));
+	join_array(field(n, "load"), " ", e, sizeof(e));
+	printf("    model %s  release %s  apmond %s\n", text_of(n, "model", b, sizeof(b)),
+	       text_of(n, "openwrt_release", c1, sizeof(c1)), text_of(n, "apmond_version", d, sizeof(d)));
+	printf("    uptime %s  load %s  free RAM %s KiB  free flash %s KiB\n", a, e,
+	       text_of(n, "free_ram_kb", b, sizeof(b)), text_of(n, "free_flash_kb", c1, sizeof(c1)));
+	join_array(field(n, "ipv4_addresses"), ", ", e, sizeof(e));
+	printf("    ULA %s  IPv4 %s\n", text_of(n, "node_ula", a, sizeof(a)), e);
+	if (def != NULL && blobmsg_get_bool(def)) {
+		snprintf(d, sizeof(d), "DEFAULT");
+	} else {
+		snprintf(d, sizeof(d), "own");
+	}
+	printf("    source %s  reports %s  lost %s  passphrase %s\n", text_of(n, "source", a, sizeof(a)),
+	       text_of(n, "reports", b, sizeof(b)), text_of(n, "lost_reports", c1, sizeof(c1)), d);
+	if (blocks != NULL && blobmsg_len(blocks) > 0) {
+		printf("    blocks:");
+		blobmsg_for_each_attr(c, blocks, rem) {
+			printf(" %s", blobmsg_name(c));
+		}
+		printf("\n");
+	}
+
+	apmon_table_init(&t, 7);
+	apmon_table_add(&t, "PHY");
+	apmon_table_add(&t, "CHANNEL");
+	apmon_table_add(&t, "MHZ");
+	apmon_table_add(&t, "HTMODE");
+	apmon_table_add(&t, "AP");
+	apmon_table_add(&t, "SSID");
+	apmon_table_add(&t, "BSSID");
+	if (radios != NULL) {
+		blobmsg_for_each_attr(r, radios, rem) {
+			struct blob_attr *aps = field(r, "aps");
+			struct blob_attr *ap;
+
+			if (aps == NULL) {
+				continue;
+			}
+			blobmsg_for_each_attr(ap, aps, rem2) {
+				add_field(&t, r, "phy");
+				add_field(&t, r, "channel");
+				add_field(&t, r, "frequency_mhz");
+				add_field(&t, r, "htmode");
+				add_field(&t, ap, "ifname");
+				add_field(&t, ap, "ssid");
+				add_field(&t, ap, "bssid");
+				count++;
+			}
+		}
+	}
+	if (count > 0) {
+		printf("  Access points\n");
+		print_table_indented(&t, "    ");
+	}
+	apmon_table_free(&t);
+
+	count = 0;
+	apmon_table_init(&t, 9);
+	apmon_table_add(&t, "MAC");
+	apmon_table_add(&t, "KIND");
+	apmon_table_add(&t, "STATE");
+	apmon_table_add(&t, "LAST_SEEN");
+	apmon_table_add(&t, "WHERE");
+	apmon_table_add(&t, "SIGNAL");
+	apmon_table_add(&t, "TX");
+	apmon_table_add(&t, "RX");
+	apmon_table_add(&t, "CONNECTED");
+	if (list != NULL) {
+		blobmsg_for_each_attr(c, list, rem) {
+			struct blob_attr *conn = field(c, "connected_s");
+
+			add_field(&t, c, "mac");
+			add_field(&t, c, "kind");
+			add_state(&t, c, stale);
+			add_age(&t, c, "last_seen_age_s");
+			add_where(&t, c);
+			add_signal(&t, c);
+			if (field(c, "speed_mbps") != NULL && blobmsg_type(field(c, "speed_mbps")) == BLOBMSG_TYPE_INT32) {
+				/* wired: the link speed both ways, as 1.x */
+				snprintf(e, sizeof(e), "%d Mbit/s", (int32_t)blobmsg_get_u32(field(c, "speed_mbps")));
+				apmon_table_add(&t, e);
+				apmon_table_add(&t, e);
+			} else {
+				add_kbps(&t, c, "tx_bitrate_kbps");
+				add_kbps(&t, c, "rx_bitrate_kbps");
+			}
+			format_uptime(conn, a, sizeof(a));
+			apmon_table_add(&t, a);
+			count++;
+		}
+	}
+	if (count > 0) {
+		printf("  Clients (%d)\n", count);
+		print_table_indented(&t, "    ");
+	} else {
+		printf("  No clients\n");
+	}
+	apmon_table_free(&t);
+	printf("\n");
+}
+
+static int show_nodes(const char *method, struct blob_attr *args)
 {
 	struct blob_attr *msg;
 	struct blob_attr *list;
 	struct blob_attr *n;
-	struct apmon_table t;
 	size_t rem;
-	int ret = call("nodes", NULL, &msg);
+	int stale = 0;
+	int ret = call(method, args, &msg);
 
 	if (ret != 0) {
-		fprintf(stderr, "nodes failed: %s\n", ubus_strerror(ret));
+		fprintf(stderr, "%s failed: %s\n", method, ubus_strerror(ret));
 		free(msg);
 		return 1;
 	}
@@ -317,41 +595,31 @@ static int cmd_nodes(void)
 		return 0;
 	}
 
-	apmon_table_init(&t, 9);
-	apmon_table_add(&t, "ID");
-	apmon_table_add(&t, "HOSTNAME");
-	apmon_table_add(&t, "ROLE");
-	apmon_table_add(&t, "STATE");
-	apmon_table_add(&t, "AGE");
-	apmon_table_add(&t, "CLIENTS");
-	apmon_table_add(&t, "LOST");
-	apmon_table_add(&t, "SOURCE");
-	apmon_table_add(&t, "PASSPHRASE");
-
 	list = top_field(msg, "nodes");
 	if (list != NULL) {
 		blobmsg_for_each_attr(n, list, rem) {
-			struct blob_attr *def = field(n, "default_passphrase");
-
-			add_field(&t, n, "id");
-			add_field(&t, n, "hostname");
-			add_field(&t, n, "role");
-			add_field(&t, n, "state");
-			add_age(&t, n, "age_s");
-			add_field(&t, n, "clients");
-			add_field(&t, n, "lost_reports");
-			add_field(&t, n, "source");
-			if (def != NULL && blobmsg_get_bool(def)) {
-				apmon_table_add(&t, "DEFAULT");
-			} else {
-				apmon_table_add(&t, "own");
-			}
+			print_node_block(n, &stale);
 		}
+	} else {
+		/* node <id>: the reply is the node table itself */
+		struct blob_buf b;
+
+		memset(&b, 0, sizeof(b));
+		blob_buf_init(&b, 0);
+		blobmsg_add_field(&b, BLOBMSG_TYPE_TABLE, "node", blob_data(msg), blob_len(msg));
+		print_node_block(blob_data(b.head), &stale);
+		blob_buf_free(&b);
 	}
-	print_table(&t);
-	apmon_table_free(&t);
+	if (stale > 0) {
+		printf("* stale: not in its node's latest report, kept until client_stale_timeout\n");
+	}
 	free(msg);
 	return 0;
+}
+
+static int cmd_nodes(void)
+{
+	return show_nodes("nodes", NULL);
 }
 
 static int cmd_clients(const char *node)
@@ -384,9 +652,10 @@ static int cmd_clients(const char *node)
 		return 0;
 	}
 
-	apmon_table_init(&t, 7);
+	apmon_table_init(&t, 8);
 	apmon_table_add(&t, "MAC");
 	apmon_table_add(&t, "NODE");
+	apmon_table_add(&t, "HOSTNAME");
 	apmon_table_add(&t, "KIND");
 	apmon_table_add(&t, "STATE");
 	apmon_table_add(&t, "LAST_SEEN");
@@ -403,6 +672,7 @@ static int cmd_clients(const char *node)
 
 			add_field(&t, c, "mac");
 			add_field(&t, c, "node");
+			add_field(&t, c, "node_hostname");
 			add_field(&t, c, "kind");
 			if (state != NULL && strcmp(blobmsg_get_string(state), "stale") == 0) {
 				apmon_table_add(&t, "stale*");
@@ -446,7 +716,7 @@ static int cmd_node(const char *id)
 	memset(&b, 0, sizeof(b));
 	blob_buf_init(&b, 0);
 	blobmsg_add_string(&b, "id", id);
-	ret = show_key_values("node", b.head, NULL);
+	ret = show_nodes("node", b.head);
 	blob_buf_free(&b);
 	return ret;
 }

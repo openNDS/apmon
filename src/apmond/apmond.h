@@ -23,6 +23,8 @@ struct apmond_config {
 	int interval;
 	int startup_delay;
 	char device[32];
+	char interface[32];
+	char netdev[32];
 	char seed[256];
 	int default_seed;
 	uint32_t key_epoch;
@@ -89,6 +91,7 @@ int apmond_read_log(int follow);
 int apmond_ula_init(const char *passphrase);
 int apmond_ula_tick(int candidate);
 int apmond_ula_holding_router(void);
+int apmond_ula_node_ready(void);
 void apmond_ula_cleanup(void);
 
 /* blocks.c - extension blocks carried in this node's reports */
