@@ -277,13 +277,14 @@ void apmon_format_date(int64_t unix_s, char *out, size_t len)
 }
 
 /*
- * Client fields the collector writes first, in its own order (client_mac, kind, last_seen, ap,
- * bridge, port, vlan, vxlan); "mac" is the pre-r8 name of client_mac. The rest follow as reported.
+ * Client fields the collector writes first, in its own order (client_mac, kind, last_seen, ap_ssid,
+ * ap_ifname, ap_bssid, bridge, port, vlan, vxlan); "mac" is the pre-r8 name of client_mac. The rest follow as reported.
  */
 int apmon_client_ordered_field(const char *name)
 {
 	static const char *const names[] = {
-		"mac", "client_mac", "kind", "last_seen", "ap", "bridge", "port", "vlan", "vxlan",
+		"mac", "client_mac", "kind", "last_seen", "ap", "ap_ssid", "ap_ifname", "ap_bssid", "bridge", "port",
+		"vlan", "vxlan",
 	};
 	size_t i;
 

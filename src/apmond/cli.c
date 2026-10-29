@@ -506,15 +506,28 @@ static void add_signal(struct apmon_table *t, struct blob_attr *c)
 	apmon_table_add(t, text);
 }
 
-static void add_where(struct apmon_table *t, struct blob_attr *c)
+/* WHERE: the SSID of a Wi-Fi client's AP (else its AP interface), the port of a wired client */
+static struct blob_attr *client_where(struct blob_attr *c)
 {
-	struct blob_attr *where = field(c, "ap");
-	char text[64];
+	struct blob_attr *where = field(c, "ap_ssid");
 
+	if (where == NULL || blobmsg_type(where) != BLOBMSG_TYPE_STRING) {
+		where = field(c, "ap_ifname");
+	}
+	if (where == NULL || blobmsg_type(where) != BLOBMSG_TYPE_STRING) {
+		where = field(c, "ap");
+	}
 	if (where == NULL || blobmsg_type(where) != BLOBMSG_TYPE_STRING) {
 		where = field(c, "port");
 	}
-	value_text(where, text, sizeof(text));
+	return where;
+}
+
+static void add_where(struct apmon_table *t, struct blob_attr *c)
+{
+	char text[64];
+
+	value_text(client_where(c), text, sizeof(text));
 	apmon_table_add(t, text);
 }
 
@@ -757,7 +770,7 @@ static int cmd_clients(const char *node)
 	if (list != NULL) {
 		blobmsg_for_each_attr(c, list, rem) {
 			struct blob_attr *state = field(c, "state");
-			struct blob_attr *where = field(c, "ap");
+			struct blob_attr *where = client_where(c);
 			struct blob_attr *signal = field(c, "signal_avg_dbm");
 			char text[64];
 
@@ -773,9 +786,6 @@ static int cmd_clients(const char *node)
 			}
 			add_age(&t, c, "last_seen_age_s");
 
-			if (where == NULL || blobmsg_type(where) != BLOBMSG_TYPE_STRING) {
-				where = field(c, "port");
-			}
 			value_text(where, text, sizeof(text));
 			apmon_table_add(&t, text);
 

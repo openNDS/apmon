@@ -398,6 +398,10 @@ static void test_extra(void)
 	CHECK(apmon_client_ordered_field("client_mac"), "client_mac is written first by the collector");
 	CHECK(apmon_client_ordered_field("mac"), "pre-r8 mac is not copied again");
 	CHECK(apmon_client_ordered_field("vxlan"), "vxlan is a location field");
+	CHECK(apmon_client_ordered_field("ap_ssid"), "ap_ssid is a location field");
+	CHECK(apmon_client_ordered_field("ap_ifname"), "ap_ifname is a location field");
+	CHECK(apmon_client_ordered_field("ap_bssid"), "ap_bssid is a location field");
+	CHECK(apmon_client_ordered_field("ap"), "pre-r9 ap is not copied again");
 	CHECK(!apmon_client_ordered_field("signal_avg_dbm"), "stats follow as reported");
 	CHECK(!apmon_client_ordered_field("speed_mbps"), "wired stats follow as reported");
 

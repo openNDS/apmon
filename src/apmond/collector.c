@@ -890,6 +890,74 @@ static void copy_field(struct blob_attr *data, const char *name)
 	}
 }
 
+/* A field of one of the node's APs (from its report's radios[].aps[]), or NULL */
+static const char *node_ap_field(struct node *n, const char *ifname, const char *name)
+{
+	struct blob_attr *radios;
+	struct blob_attr *r;
+	size_t rem;
+
+	if (n == NULL || ifname == NULL) {
+		return NULL;
+	}
+	radios = report_part(n, "radios");
+	if (radios == NULL) {
+		return NULL;
+	}
+	blobmsg_for_each_attr(r, radios, rem) {
+		struct blob_attr *cur;
+		size_t rem2;
+
+		blobmsg_for_each_attr(cur, r, rem2) {
+			struct blob_attr *ap;
+			size_t rem3;
+
+			if (strcmp(blobmsg_name(cur), "aps") != 0) {
+				continue;
+			}
+			blobmsg_for_each_attr(ap, cur, rem3) {
+				const char *name_of_ap = table_string(ap, "ifname");
+
+				if (name_of_ap != NULL && strcmp(name_of_ap, ifname) == 0) {
+					return table_string(ap, name);
+				}
+			}
+		}
+	}
+	return NULL;
+}
+
+/*
+ * ap_ssid, ap_ifname, ap_bssid of a Wi-Fi client. Senders from r9 report them; for older betas
+ * (only "ap": ifname) the SSID and BSSID are looked up in the node's aps.
+ */
+static void add_client_ap(struct client *c, struct node *n)
+{
+	const char *ifname = table_string(c->data, "ap_ifname");
+	const char *ssid = table_string(c->data, "ap_ssid");
+	const char *bssid = table_string(c->data, "ap_bssid");
+
+	if (ifname == NULL) {
+		ifname = table_string(c->data, "ap");
+	}
+	if (ifname == NULL) {
+		return;
+	}
+	if (ssid == NULL) {
+		ssid = node_ap_field(n, ifname, "ssid");
+	}
+	if (bssid == NULL) {
+		bssid = node_ap_field(n, ifname, "bssid");
+	}
+	if (ssid != NULL) {
+		blobmsg_add_string(&bb, "ap_ssid", ssid);
+	}
+	blobmsg_add_string(&bb, "ap_ifname", ifname);
+	if (bssid != NULL) {
+		blobmsg_add_string(&bb, "ap_bssid", bssid);
+	}
+}
+
 /*
  * One client: client_mac first, then (flat list only) node_mac and node_hostname, kind, state,
  * last seen (seconds, date, age), where it is (ap, or bridge and port), vlan, vxlan, then the
@@ -919,7 +987,7 @@ static void add_client(struct client *c, struct node *n, uint64_t now, int with_
 		add_time(&bb, "last_seen", c->last_seen);
 		blobmsg_add_u32(&bb, "last_seen_age_s", (uint32_t)(age_ms(now, (uint64_t)c->last_seen) / 1000));
 	}
-	copy_field(c->data, "ap");
+	add_client_ap(c, n);
 	copy_field(c->data, "bridge");
 	copy_field(c->data, "port");
 	copy_field(c->data, "vlan");

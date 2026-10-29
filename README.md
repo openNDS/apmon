@@ -65,7 +65,7 @@ Example:
 
 ## Field names
 
-Nodes are identified by `node_mac` and clients by `client_mac`, the first field of every client object. Clients nested under a node in `apmond nodes` / `node` are just `client_mac`, `kind`, `state`, `last_seen`, `last_seen_date`, `last_seen_age_s`, location (`ap` or `bridge`/`port`), `vlan`, `vxlan`, then their stats; the flat `apmond clients` list adds `node_mac` and `node_hostname` after `client_mac`.
+Nodes are identified by `node_mac` and clients by `client_mac`, the first field of every client object. Clients nested under a node in `apmond nodes` / `node` are just `client_mac`, `kind`, `state`, `last_seen`, `last_seen_date`, `last_seen_age_s`, location (Wi-Fi `ap_ssid`, `ap_ifname`, `ap_bssid`; wired `bridge`/`port`), `vlan`, `vxlan`, then their stats (`-t` shows a Wi-Fi client's SSID under WHERE); the flat `apmond clients` list adds `node_mac` and `node_hostname` after `client_mac`.
 
 ## Times
 

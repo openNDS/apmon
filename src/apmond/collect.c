@@ -401,7 +401,8 @@ static void json_vxlan(struct apmon_json *j, const char *port, uint64_t now_ms)
 	apmon_json_close_object(j);
 }
 
-static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const char *ifname, uint64_t now_ms,
+static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const char *ifname, struct blob_attr *info,
+			    uint64_t now_ms,
 			    struct wifi_macs *macs)
 {
 	struct blob_attr *mac = find_in_table(sta, "mac");
@@ -432,7 +433,9 @@ static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const c
 	apmon_json_open_object(j, NULL);
 	apmon_json_string(j, "client_mac", lower);
 	apmon_json_string(j, "kind", "wifi");
-	apmon_json_string(j, "ap", ifname);
+	json_string_attr(j, "ap_ssid", find_attr(info, "ssid"));
+	apmon_json_string(j, "ap_ifname", ifname);
+	json_string_attr(j, "ap_bssid", find_attr(info, "bssid"));
 	json_vlan(j, apmond_port_vlan(ifname, now_ms));
 	json_vxlan(j, ifname, now_ms);
 	json_int_attr(j, "signal_avg_dbm", find_in_table(sta, "signal_avg"));
@@ -557,7 +560,7 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 		results = find_attr(assoc, "results");
 		if (results != NULL) {
 			blobmsg_for_each_attr(sta, results, srem) {
-				add_wifi_client(clients, sta, aps[i].ifname, now_ms, macs);
+				add_wifi_client(clients, sta, aps[i].ifname, aps[i].info, now_ms, macs);
 			}
 		}
 		free(assoc);
