@@ -34,16 +34,17 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
 
 `apmond` is also a thin ubus client of the running daemon. Output is JSON, indented as jq and apmond 1.x print it (two spaces; `ubus call apmond ...` keeps libubox's own format); add `-t` or `--table` for aligned tables.
 
-    apmond status                     this node: role and why, ULAs, collector, counters, local blocks
-    apmond nodes                      collector: every node with its info, APs and clients (as 1.x show_ap_data)
-    apmond clients [node]             collector: flat client list, by node then MAC (stale ones marked stale*)
-    apmond node <node_mac>            collector: one node, same layout as nodes
+    apmond status                        this node: role and why, ULAs, collector, counters, debuglevel, blocks
+    apmond nodes                         collector: every node with its info, APs and clients (as 1.x show_ap_data)
+    apmond node <node_mac>               collector: one node, same layout as nodes
+    apmond clients [node_mac]            collector: flat client list, by node then MAC (stale ones marked stale*)
+    apmond forget <node_mac|client_mac>  collector: drop a node with its clients, or one client
     apmond block add <name> <json> [ttl]
     apmond block remove <name>
-    apmond forget <node_mac|client_mac>  collector: drop a node with its clients, or one client
-    apmond read_log [-f]              print the log; -f keeps following it
-    apmond bench                      key derivation time on this hardware
-    apmond run [-c confdir]           the daemon itself (started by /etc/init.d/apmond)
+    apmond debuglevel [0|1|2|3]          show, or set at once and save to uci
+    apmond read_log [-f]                 print the log; -f keeps following it
+    apmond bench                         key derivation time on this hardware
+    apmond run [-c confdir]              the daemon itself (started by /etc/init.d/apmond)
 
 Example:
 
@@ -76,6 +77,8 @@ In collector output (`apmond nodes|node|clients` and the ubus methods) client `l
 Every AP and client carries `vlan`: the access VLAN of its bridge port (PVID on a `vlan_filtering` bridge, so an AP on `option network lan` with lan on `br-lan.10` shows 10; a Wi-Fi client has its AP's VLAN, a wired client its port's). `null` means untagged / no VLAN; tables show `-`. On mesh11sd nodes, where the trunk is a VXLAN (`vxlan<tun_id>` in `br-tun<tun_id>`), APs and clients on that bridge also carry `"vxlan": {"vni": N, "device": "vxlan0"}`, otherwise `null`. Both come from rtnetlink, no forks, cached 5 minutes.
 
 ## Logging
+
+`apmond debuglevel` prints the level; `apmond debuglevel N` (or `ubus call apmond debuglevel '{"level":N}'`) applies it at once and commits `option debuglevel` to /etc/config/apmond, as 1.x did, so it persists. A change made with `uci set apmond.setup.debuglevel=N; uci commit apmond` is picked up on the next report cycle. Every change is logged at notice level.
 
 As apmond 1.x: messages above `debuglevel` (0 errors, 1 notices (default), 2 info, 3 debug) are dropped and identical consecutive messages are written once. Errors and notices go to syslog and to the log file; info and debug go to the log file only. The log file is `<log_mountpoint>/apmond/apmond_log.log` (default `/tmp/apmond/apmond_log.log`), trimmed to `max_log_entries` lines (500), each line `<date> daemon.<level> apmond[<pid>]: [<n>] <message>`. A `log_mountpoint` that is not mounted disables the log file so it can't fill flash.
 

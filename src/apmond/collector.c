@@ -744,6 +744,7 @@ static int ubus_status(struct ubus_context *ctx, struct ubus_object *obj, struct
 	blobmsg_add_u64(&bb, "reports_sent", apmond.reports_sent);
 	blobmsg_add_u64(&bb, "reports_failed", apmond.reports_failed);
 	blobmsg_add_u32(&bb, "last_status", (uint32_t)apmond.last_status);
+	blobmsg_add_u32(&bb, "debuglevel", (uint32_t)apmond.cfg.debuglevel);
 	apmond_blocks_list(&bb);
 	if (apmond.role == ROLE_COLLECTOR) {
 		void *c = blobmsg_open_table(&bb, "collector_counters");
@@ -1331,6 +1332,64 @@ static int ubus_forget(struct ubus_context *ctx, struct ubus_object *obj, struct
 	return 0;
 }
 
+void apmond_set_debuglevel(int level)
+{
+	int old = apmond.cfg.debuglevel;
+
+	/* logged at notice level whichever way it goes, as 1.x */
+	apmond.cfg.debuglevel = 1;
+	LOG_NOTICE_("debuglevel changed from [ %d ] to [ %d ]", old, level);
+	apmond.cfg.debuglevel = level;
+}
+
+enum {
+	DEBUGLEVEL_LEVEL,
+	__DEBUGLEVEL_MAX,
+};
+
+static const struct blobmsg_policy debuglevel_policy[__DEBUGLEVEL_MAX] = {
+	[DEBUGLEVEL_LEVEL] = { .name = "level", .type = BLOBMSG_TYPE_INT32 },
+};
+
+/*
+ * debuglevel {}: the current level; debuglevel {"level": N}: set it now and commit it to
+ * option debuglevel in /etc/config/apmond, so it also survives a restart (as 1.x)
+ */
+static int ubus_debuglevel(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
+			   const char *method, struct blob_attr *msg)
+{
+	struct blob_attr *tb[__DEBUGLEVEL_MAX];
+	int persisted = 0;
+
+	(void)obj;
+	(void)method;
+
+	blobmsg_parse(debuglevel_policy, __DEBUGLEVEL_MAX, tb, blob_data(msg), blob_len(msg));
+	if (tb[DEBUGLEVEL_LEVEL] != NULL) {
+		int level = (int)blobmsg_get_u32(tb[DEBUGLEVEL_LEVEL]);
+
+		if (level < 0 || level > 3) {
+			return UBUS_STATUS_INVALID_ARGUMENT;
+		}
+		if (level != apmond.cfg.debuglevel) {
+			apmond_set_debuglevel(level);
+		}
+		if (apmond_config_write_debuglevel(level) == 0) {
+			persisted = 1;
+		} else {
+			LOG_ERR_("could not commit option debuglevel to /etc/config/apmond");
+		}
+	}
+
+	blob_buf_init(&bb, 0);
+	blobmsg_add_u32(&bb, "debuglevel", (uint32_t)apmond.cfg.debuglevel);
+	if (tb[DEBUGLEVEL_LEVEL] != NULL) {
+		blobmsg_add_u8(&bb, "persisted", (uint8_t)persisted);
+	}
+	ubus_send_reply(ctx, req, bb.head);
+	return 0;
+}
+
 static const struct ubus_method apmond_methods[] = {
 	UBUS_METHOD_NOARG("status", ubus_status),
 	UBUS_METHOD_NOARG("nodes", ubus_nodes),
@@ -1339,6 +1398,7 @@ static const struct ubus_method apmond_methods[] = {
 	UBUS_METHOD("add_block", ubus_add_block, add_block_policy),
 	UBUS_METHOD("remove_block", ubus_remove_block, remove_block_policy),
 	UBUS_METHOD("forget", ubus_forget, forget_policy),
+	UBUS_METHOD("debuglevel", ubus_debuglevel, debuglevel_policy),
 };
 
 static struct ubus_object_type apmond_object_type = UBUS_OBJECT_TYPE("apmond", apmond_methods);

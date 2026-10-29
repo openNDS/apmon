@@ -2,6 +2,7 @@
  * apmond uci configuration (/etc/config/apmond, section 'setup')
  * SPDX-License-Identifier: GPL-2.0-only
  */
+#include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
@@ -49,6 +50,9 @@ static int get_int(struct uci_context *ctx, struct uci_section *s, const char *n
 	return (int)n;
 }
 
+/* The -c confdir the daemon was started with, for the debuglevel option below */
+static const char *loaded_confdir;
+
 int apmond_config_load(struct apmond_config *cfg, const char *confdir)
 {
 	struct uci_context *ctx = uci_alloc_context();
@@ -58,6 +62,7 @@ int apmond_config_load(struct apmond_config *cfg, const char *confdir)
 	if (ctx == NULL) {
 		return -1;
 	}
+	loaded_confdir = confdir;
 	if (confdir != NULL) {
 		uci_set_confdir(ctx, confdir);
 	}
@@ -92,4 +97,58 @@ int apmond_config_load(struct apmond_config *cfg, const char *confdir)
 
 	uci_free_context(ctx);
 	return 0;
+}
+
+/*
+ * option debuglevel, as apmond 1.x: re-read from uci on every report cycle, so
+ * "uci set apmond.setup.debuglevel=N; uci commit apmond" applies without a restart.
+ * Returns the level, or -1 if the option is missing or invalid.
+ */
+int apmond_config_read_debuglevel(void)
+{
+	struct uci_context *ctx = uci_alloc_context();
+	struct uci_package *pkg = NULL;
+	struct uci_section *s;
+	const char *v;
+	int level = -1;
+
+	if (ctx == NULL) {
+		return -1;
+	}
+	if (loaded_confdir != NULL) {
+		uci_set_confdir(ctx, loaded_confdir);
+	}
+	if (uci_load(ctx, "apmond", &pkg) == UCI_OK) {
+		s = uci_lookup_section(ctx, pkg, "setup");
+		v = get_option(ctx, s, "debuglevel");
+		if (v != NULL && apmon_debuglevel_parse(v, &level) != 0) {
+			level = -1;
+		}
+	}
+	uci_free_context(ctx);
+	return level;
+}
+
+/* Set and commit option debuglevel (1.x "apmond debuglevel N" committed at once too) */
+int apmond_config_write_debuglevel(int level)
+{
+	struct uci_context *ctx = uci_alloc_context();
+	struct uci_ptr ptr;
+	char spec[64];
+	int ret = -1;
+
+	if (ctx == NULL) {
+		return -1;
+	}
+	if (loaded_confdir != NULL) {
+		uci_set_confdir(ctx, loaded_confdir);
+	}
+	snprintf(spec, sizeof(spec), "apmond.setup.debuglevel=%d", level);
+	if (uci_lookup_ptr(ctx, &ptr, spec, true) == UCI_OK && uci_set(ctx, &ptr) == UCI_OK) {
+		if (uci_commit(ctx, &ptr.p, false) == UCI_OK) {
+			ret = 0;
+		}
+	}
+	uci_free_context(ctx);
+	return ret;
 }

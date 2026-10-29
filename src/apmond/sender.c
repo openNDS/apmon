@@ -280,6 +280,12 @@ static int ipv4_successes;
 static void report_cb(struct uloop_timeout *t)
 {
 	int status;
+	int level = apmond_config_read_debuglevel();
+
+	/* as 1.x: a debuglevel changed in uci applies on the next cycle */
+	if (level >= 0 && level != apmond.cfg.debuglevel) {
+		apmond_set_debuglevel(level);
+	}
 
 	decide_role();
 

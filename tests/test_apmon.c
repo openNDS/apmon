@@ -405,6 +405,17 @@ static void test_extra(void)
 	CHECK(!apmon_client_ordered_field("signal_avg_dbm"), "stats follow as reported");
 	CHECK(!apmon_client_ordered_field("speed_mbps"), "wired stats follow as reported");
 
+	{
+		int level = -1;
+
+		CHECK(apmon_debuglevel_parse("0", &level) == 0 && level == 0, "debuglevel 0");
+		CHECK(apmon_debuglevel_parse("3", &level) == 0 && level == 3, "debuglevel 3");
+		CHECK(apmon_debuglevel_parse("4", &level) != 0, "debuglevel 4 invalid");
+		CHECK(apmon_debuglevel_parse("-1", &level) != 0, "debuglevel -1 invalid");
+		CHECK(apmon_debuglevel_parse("12", &level) != 0, "debuglevel 12 invalid");
+		CHECK(apmon_debuglevel_parse("", &level) != 0, "empty debuglevel invalid");
+	}
+
 	apmon_format_age(12, age, sizeof(age));
 	CHECK(strcmp(age, "12s") == 0, "age 12s");
 	apmon_format_age(300, age, sizeof(age));

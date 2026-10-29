@@ -109,6 +109,9 @@ int apmond_cli(int argc, char **argv);
 
 /* config.c */
 int apmond_config_load(struct apmond_config *cfg, const char *confdir);
+int apmond_config_read_debuglevel(void);
+int apmond_config_write_debuglevel(int level);
+void apmond_set_debuglevel(int level);
 
 /* collect.c - build the REPORT plaintext */
 char *apmond_build_report(struct apmond *a, uint64_t now_ms);

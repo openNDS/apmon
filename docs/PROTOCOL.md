@@ -230,6 +230,7 @@ ubus object **`apmond`** (used by luci-app-apmond and the `apmond` CLI, which be
 | `client` | `client_mac` | one client, with node history (last N roams) |
 | `add_block` | `name`, `data` (object), `ttl` (s, optional) | any node: attach or replace an extension block in this node's reports |
 | `remove_block` | `name` | any node: remove it |
+| `debuglevel` | `level` (0–3)? | without `level`: `{"debuglevel": N}`. With it: applies at once, commits `option debuglevel` to /etc/config/apmond (as 1.x, so it survives a restart) and returns `{"debuglevel": N, "persisted": true}`. The daemon also re-reads the uci option every report cycle, so `uci set apmond.setup.debuglevel=N; uci commit apmond` works too |
 | `forget` | `node_mac` (or `node`) or `client_mac` (or `client`) | collector: drop a node with its clients, or one client (a node that still reports comes back) |
 
 `status` on every node also returns `role_reason`, `node_ula`, `collector_ula`, `collector_via` (sender: `ula`, `ipv4` or `config`) and the local `blocks` (name, size, seconds to expiry).

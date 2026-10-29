@@ -295,3 +295,13 @@ int apmon_client_ordered_field(const char *name)
 	}
 	return 0;
 }
+
+/* debuglevel as 1.x: one digit 0 (errors only) .. 3 (debug). 0 and the level, or -1 */
+int apmon_debuglevel_parse(const char *text, int *level)
+{
+	if (text == NULL || text[0] < '0' || text[0] > '3' || text[1] != '\0') {
+		return -1;
+	}
+	*level = text[0] - '0';
+	return 0;
+}

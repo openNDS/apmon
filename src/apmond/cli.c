@@ -21,17 +21,19 @@ static void usage(void)
 	       "\n"
 	       "Usage: apmond [-t|--table] <command> [arguments]\n"
 	       "\n"
-	       "  status                       this node: role, ULA, collector, counters, local blocks\n"
-	       "  nodes                        collector: all reporting nodes\n"
-	       "  clients [node]               collector: all clients, or those of one node\n"
-	       "  node <id>                    collector: one node's last report\n"
-	       "  block add <name> <json> [ttl] attach a JSON object to this node's reports\n"
-	       "  block remove <name>          remove it again\n"
-	       "  forget <node|client>         collector: drop a node (with its clients) or a client\n"
-	       "  read_log [-f]                print the apmond log; -f keeps following it\n"
-	       "  bench                        time the key derivation on this hardware\n"
-	       "  run [-c confdir]             run the daemon (used by /etc/init.d/apmond)\n"
-	       "  help                         this text\n"
+	       "  status                               this node: role, ULA, collector, counters, debuglevel, blocks\n"
+	       "  nodes                                collector: every node with its info, APs and clients\n"
+	       "  node <node_mac>                      collector: one node, same layout as nodes\n"
+	       "  clients [node_mac]                   collector: flat client list, or the clients of one node\n"
+	       "  forget <node_mac|client_mac>         collector: drop a node (with its clients) or a client\n"
+	       "  block add <name> <json> [ttl]        attach a JSON object to this node's reports\n"
+	       "  block remove <name>                  remove it again\n"
+	       "  debuglevel [0|1|2|3]                 show, or set now and save to uci (0 errors, 1 notice,\n"
+	       "                                       2 info, 3 debug)\n"
+	       "  read_log [-f]                        print the apmond log; -f keeps following it\n"
+	       "  bench                                time the key derivation on this hardware\n"
+	       "  run [-c confdir]                     run the daemon (used by /etc/init.d/apmond)\n"
+	       "  help, -h, --help                     this text\n"
 	       "\n"
 	       "Output is JSON; -t or --table prints readable tables. Ages: 12s, 5m, 3h, 2d.\n",
 	       APMOND_VERSION);
@@ -900,6 +902,41 @@ static int cmd_forget(const char *what)
 	return 0;
 }
 
+/* As 1.x: "debuglevel" prints the level, "debuglevel N" sets it (and saves it to uci) */
+static int cmd_debuglevel(int argc, char **argv)
+{
+	struct blob_buf b;
+	struct blob_attr *msg = NULL;
+	struct blob_attr *level;
+	int wanted;
+	int ret;
+
+	memset(&b, 0, sizeof(b));
+	blob_buf_init(&b, 0);
+	if (argc == 1) {
+		if (apmon_debuglevel_parse(argv[0], &wanted) != 0) {
+			fprintf(stderr, "Invalid debuglevel requested\n");
+			blob_buf_free(&b);
+			return 1;
+		}
+		blobmsg_add_u32(&b, "level", (uint32_t)wanted);
+	}
+	ret = call("debuglevel", b.head, &msg);
+	blob_buf_free(&b);
+
+	if (ret != 0) {
+		fprintf(stderr, "debuglevel failed: %s\n", ubus_strerror(ret));
+		free(msg);
+		return 1;
+	}
+	level = top_field(msg, "debuglevel");
+	if (level != NULL) {
+		printf("%d\n", (int)blobmsg_get_u32(level));
+	}
+	free(msg);
+	return 0;
+}
+
 int apmond_cli(int argc, char **argv)
 {
 	char *args[16];
@@ -943,6 +980,9 @@ int apmond_cli(int argc, char **argv)
 	}
 	if (strcmp(args[0], "forget") == 0 && n == 2) {
 		return cmd_forget(args[1]);
+	}
+	if (strcmp(args[0], "debuglevel") == 0 && n <= 2) {
+		return cmd_debuglevel(n - 1, args + 1);
 	}
 	if (strcmp(args[0], "read_log") == 0 && n <= 2) {
 		int follow = 0;

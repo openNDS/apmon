@@ -203,6 +203,7 @@ const char *apmon_pretty_text(struct apmon_pretty *p);
 int apmon_port_access_vlan(const uint16_t *flags, const uint16_t *vids, int count);
 int apmon_vlan_from_name(const char *ifname);
 int apmon_client_ordered_field(const char *name);
+int apmon_debuglevel_parse(const char *text, int *level);
 void apmon_format_date(int64_t unix_s, char *out, size_t len);
 
 void apmon_table_init(struct apmon_table *t, int columns);
