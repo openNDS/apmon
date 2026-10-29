@@ -171,6 +171,31 @@ void apmon_format_age(int64_t seconds, char *out, size_t out_len);
 int apmon_node_cmp(int collector_a, const char *host_a, const char *id_a, int collector_b, const char *host_b,
 		   const char *id_b);
 
+/* Pretty JSON writer (CLI output): two space indent, "key": value, {} and [] when empty */
+#define APMON_PRETTY_DEPTH 32
+
+struct apmon_pretty {
+	char *buf;
+	size_t len;
+	size_t cap;
+	int depth;
+	int failed;
+	int count[APMON_PRETTY_DEPTH];
+	int is_object[APMON_PRETTY_DEPTH];
+};
+
+void apmon_pretty_init(struct apmon_pretty *p);
+void apmon_pretty_free(struct apmon_pretty *p);
+void apmon_pretty_open_object(struct apmon_pretty *p, const char *key);
+void apmon_pretty_open_array(struct apmon_pretty *p, const char *key);
+void apmon_pretty_close(struct apmon_pretty *p);
+void apmon_pretty_string(struct apmon_pretty *p, const char *key, const char *value);
+void apmon_pretty_raw(struct apmon_pretty *p, const char *key, const char *value);
+void apmon_pretty_int(struct apmon_pretty *p, const char *key, long long value);
+void apmon_pretty_double(struct apmon_pretty *p, const char *key, double value);
+void apmon_pretty_bool(struct apmon_pretty *p, const char *key, int value);
+const char *apmon_pretty_text(struct apmon_pretty *p);
+
 void apmon_table_init(struct apmon_table *t, int columns);
 void apmon_table_add(struct apmon_table *t, const char *cell);
 size_t apmon_table_render(const struct apmon_table *t, char *out, size_t out_len);

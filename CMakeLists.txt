@@ -20,6 +20,7 @@ add_library(apmon STATIC
 	src/lib/util.c
 	src/lib/json.c
 	src/lib/extra.c
+	src/lib/pretty.c
 )
 target_include_directories(apmon PUBLIC src/lib)
 set_property(TARGET apmon PROPERTY POSITION_INDEPENDENT_CODE ON)

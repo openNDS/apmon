@@ -297,6 +297,72 @@ static void test_extra(void)
 	CHECK(apmon_node_cmp(0, "ap-1", "b", 0, "ap-2", "a") < 0, "nodes sort by hostname");
 	CHECK(apmon_node_cmp(0, "ap", "a", 0, "ap", "b") < 0, "same hostname sorts by id");
 
+	{
+		struct apmon_pretty pj;
+		const char *want =
+			"{\n"
+			"  \"name\": \"ap \\\"1\\\"\\\\x\\n\\u0001\",\n"
+			"  \"n\": -3,\n"
+			"  \"ok\": true,\n"
+			"  \"none\": null,\n"
+			"  \"load\": 0.5,\n"
+			"  \"empty_obj\": {},\n"
+			"  \"empty_arr\": [],\n"
+			"  \"nodes\": [\n"
+			"    {\n"
+			"      \"id\": \"a\",\n"
+			"      \"clients\": [\n"
+			"        1,\n"
+			"        2\n"
+			"      ]\n"
+			"    },\n"
+			"    {\n"
+			"      \"blocks\": {}\n"
+			"    }\n"
+			"  ]\n"
+			"}\n";
+
+		apmon_pretty_init(&pj);
+		apmon_pretty_open_object(&pj, NULL);
+		apmon_pretty_string(&pj, "name", "ap \"1\"\\x\n\001");
+		apmon_pretty_int(&pj, "n", -3);
+		apmon_pretty_bool(&pj, "ok", 1);
+		apmon_pretty_raw(&pj, "none", "null");
+		apmon_pretty_double(&pj, "load", 0.5);
+		apmon_pretty_open_object(&pj, "empty_obj");
+		apmon_pretty_close(&pj);
+		apmon_pretty_open_array(&pj, "empty_arr");
+		apmon_pretty_close(&pj);
+		apmon_pretty_open_array(&pj, "nodes");
+		apmon_pretty_open_object(&pj, NULL);
+		apmon_pretty_string(&pj, "id", "a");
+		apmon_pretty_open_array(&pj, "clients");
+		apmon_pretty_int(&pj, NULL, 1);
+		apmon_pretty_int(&pj, NULL, 2);
+		apmon_pretty_close(&pj);
+		apmon_pretty_close(&pj);
+		apmon_pretty_open_object(&pj, NULL);
+		apmon_pretty_open_object(&pj, "blocks");
+		apmon_pretty_close(&pj);
+		apmon_pretty_close(&pj);
+		apmon_pretty_close(&pj);
+		apmon_pretty_close(&pj);
+		CHECK(apmon_pretty_text(&pj) != NULL && strcmp(apmon_pretty_text(&pj), want) == 0,
+		      "pretty JSON: nesting, empty containers, escaping, arrays of objects");
+		if (apmon_pretty_text(&pj) != NULL && strcmp(apmon_pretty_text(&pj), want) != 0) {
+			printf("%s", apmon_pretty_text(&pj));
+		}
+		apmon_pretty_free(&pj);
+
+		apmon_pretty_init(&pj);
+		apmon_pretty_open_object(&pj, NULL);
+		apmon_pretty_close(&pj);
+		CHECK(apmon_pretty_text(&pj) != NULL && strcmp(apmon_pretty_text(&pj), "{}\n") == 0, "pretty JSON: empty reply");
+		apmon_pretty_close(&pj);
+		CHECK(apmon_pretty_text(&pj) == NULL, "pretty JSON: unbalanced close fails");
+		apmon_pretty_free(&pj);
+	}
+
 	apmon_format_age(12, age, sizeof(age));
 	CHECK(strcmp(age, "12s") == 0, "age 12s");
 	apmon_format_age(300, age, sizeof(age));

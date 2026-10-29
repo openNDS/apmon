@@ -32,7 +32,7 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
 
 ## Command line
 
-`apmond` is also a thin ubus client of the running daemon. Output is JSON (as `ubus call` prints it); add `-t` or `--table` for aligned tables.
+`apmond` is also a thin ubus client of the running daemon. Output is JSON, indented as jq and apmond 1.x print it (two spaces; `ubus call apmond ...` keeps libubox's own format); add `-t` or `--table` for aligned tables.
 
     apmond status                     this node: role and why, ULAs, collector, counters, local blocks
     apmond nodes                      collector: every node with its info, APs and clients (as 1.x show_ap_data)

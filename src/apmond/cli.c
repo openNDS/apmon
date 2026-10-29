@@ -82,18 +82,83 @@ static int call(const char *method, struct blob_attr *args, struct blob_attr **o
 	return ret;
 }
 
+static void pretty_attr(struct apmon_pretty *p, struct blob_attr *a, const char *key);
+
+/* The members of a blobmsg table or array */
+static void pretty_members(struct apmon_pretty *p, struct blob_attr *a, int is_array)
+{
+	struct blob_attr *cur;
+	size_t rem;
+
+	blobmsg_for_each_attr(cur, a, rem) {
+		if (is_array) {
+			pretty_attr(p, cur, NULL);
+		} else {
+			pretty_attr(p, cur, blobmsg_name(cur));
+		}
+	}
+}
+
+static void pretty_attr(struct apmon_pretty *p, struct blob_attr *a, const char *key)
+{
+	switch (blobmsg_type(a)) {
+	case BLOBMSG_TYPE_TABLE:
+		apmon_pretty_open_object(p, key);
+		pretty_members(p, a, 0);
+		apmon_pretty_close(p);
+		break;
+	case BLOBMSG_TYPE_ARRAY:
+		apmon_pretty_open_array(p, key);
+		pretty_members(p, a, 1);
+		apmon_pretty_close(p);
+		break;
+	case BLOBMSG_TYPE_STRING:
+		apmon_pretty_string(p, key, blobmsg_get_string(a));
+		break;
+	case BLOBMSG_TYPE_BOOL:
+		apmon_pretty_bool(p, key, blobmsg_get_bool(a));
+		break;
+	case BLOBMSG_TYPE_INT16:
+		apmon_pretty_int(p, key, (int16_t)blobmsg_get_u16(a));
+		break;
+	case BLOBMSG_TYPE_INT32:
+		apmon_pretty_int(p, key, (int32_t)blobmsg_get_u32(a));
+		break;
+	case BLOBMSG_TYPE_INT64:
+		apmon_pretty_int(p, key, (long long)(int64_t)blobmsg_get_u64(a));
+		break;
+	case BLOBMSG_TYPE_DOUBLE:
+		apmon_pretty_double(p, key, blobmsg_get_double(a));
+		break;
+	default:
+		apmon_pretty_raw(p, key, "null");
+		break;
+	}
+}
+
+/* JSON as jq and apmond 1.x print it (ubus call keeps libubox's own format) */
 static void print_json(struct blob_attr *msg)
 {
-	char *json;
+	struct apmon_pretty p;
+	struct blob_attr *cur;
+	size_t rem;
+	const char *text;
 
 	if (msg == NULL) {
 		return;
 	}
-	json = blobmsg_format_json_indent(msg, true, 0);
-	if (json != NULL) {
-		printf("%s\n", json);
-		free(json);
+	apmon_pretty_init(&p);
+	apmon_pretty_open_object(&p, NULL);
+	blob_for_each_attr(cur, msg, rem) {
+		pretty_attr(&p, cur, blobmsg_name(cur));
 	}
+	apmon_pretty_close(&p);
+
+	text = apmon_pretty_text(&p);
+	if (text != NULL) {
+		fputs(text, stdout);
+	}
+	apmon_pretty_free(&p);
 }
 
 /* ---------- table helpers ---------- */
