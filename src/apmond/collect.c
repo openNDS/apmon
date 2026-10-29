@@ -267,6 +267,32 @@ static void add_addresses(struct apmon_json *j, const char *device)
 	freeifaddrs(list);
 }
 
+/* package_version, build_commit, running/installed sha256, restart_needed (null when unknown) */
+static void add_identity(struct apmon_json *j)
+{
+	int restart;
+
+	apmond_identity_refresh();
+	apmon_json_string(j, "package_version", APMOND_PACKAGE_VERSION);
+	apmon_json_string(j, "build_commit", APMOND_BUILD_COMMIT);
+	if (apmond.running_sha256[0] != '\0') {
+		apmon_json_string(j, "running_sha256", apmond.running_sha256);
+	} else {
+		apmon_json_null(j, "running_sha256");
+	}
+	if (apmond.installed_sha256[0] != '\0') {
+		apmon_json_string(j, "installed_sha256", apmond.installed_sha256);
+	} else {
+		apmon_json_null(j, "installed_sha256");
+	}
+	restart = apmond_restart_needed();
+	if (restart < 0) {
+		apmon_json_null(j, "restart_needed");
+	} else {
+		apmon_json_bool(j, "restart_needed", restart);
+	}
+}
+
 static void add_node(struct apmond *a, struct apmon_json *j)
 {
 	struct sysinfo si;
@@ -289,6 +315,7 @@ static void add_node(struct apmond *a, struct apmon_json *j)
 	}
 
 	apmon_json_string(j, "apmond_version", APMOND_VERSION);
+	add_identity(j);
 
 	f = fopen("/etc/openwrt_release", "r");
 	if (f != NULL) {

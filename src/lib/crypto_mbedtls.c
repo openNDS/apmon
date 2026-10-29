@@ -2,6 +2,7 @@
  * libapmon crypto backend: mbedtls (OpenWrt default)
  * SPDX-License-Identifier: GPL-2.0-only
  */
+#include <stdio.h>
 #include <string.h>
 #include <sys/random.h>
 #include <errno.h>
@@ -114,4 +115,48 @@ int apmon_sha256(const uint8_t *data, size_t len, uint8_t out[32])
 		return -1;
 	}
 	return 0;
+}
+
+/* sha256 of a file as lowercase hex (as sha256sum); 0 on success, -1 if it cannot be read */
+int apmon_sha256_file(const char *path, char hex[65])
+{
+	const mbedtls_md_info_t *md = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+	mbedtls_md_context_t ctx;
+	unsigned char buf[4096];
+	uint8_t digest[32];
+	size_t n;
+	FILE *f;
+	int rc = 0;
+
+	hex[0] = '\0';
+	if (md == NULL) {
+		return -1;
+	}
+	f = fopen(path, "rb");
+	if (f == NULL) {
+		return -1;
+	}
+
+	mbedtls_md_init(&ctx);
+	if (mbedtls_md_setup(&ctx, md, 0) != 0 || mbedtls_md_starts(&ctx) != 0) {
+		rc = -1;
+	}
+	while (rc == 0 && (n = fread(buf, 1, sizeof(buf), f)) > 0) {
+		if (mbedtls_md_update(&ctx, buf, n) != 0) {
+			rc = -1;
+		}
+	}
+	if (rc == 0 && ferror(f)) {
+		rc = -1;
+	}
+	if (rc == 0 && mbedtls_md_finish(&ctx, digest) != 0) {
+		rc = -1;
+	}
+	mbedtls_md_free(&ctx);
+	fclose(f);
+
+	if (rc == 0) {
+		apmon_hex_encode(digest, sizeof(digest), hex);
+	}
+	return rc;
 }

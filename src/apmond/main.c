@@ -132,8 +132,11 @@ static int run_daemon(const char *confdir)
 		warn_default_seed(&seed_warn_timer);
 	}
 
+	apmond_identity_init();
 	LOG_NOTICE_("apmond %s started, node id %s, node ULA %s, port %d", APMOND_VERSION, apmond.id_str,
 		    apmond.node_ula, apmond.cfg.port);
+	LOG_INFO_("build %s %s, sha256 %s", APMOND_PACKAGE_VERSION, APMOND_BUILD_COMMIT,
+		  apmond.running_sha256[0] != '\0' ? apmond.running_sha256 : "unknown");
 	apmond_sender_start();
 
 	uloop_run();

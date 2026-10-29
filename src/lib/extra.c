@@ -305,3 +305,31 @@ int apmon_debuglevel_parse(const char *text, int *level)
 	*level = text[0] - '0';
 	return 0;
 }
+
+/*
+ * restart_needed: 1 when both hashes are known and differ (the binary on disk was replaced
+ * since the daemon started), 0 when they match, -1 when either is unknown (reported as null).
+ */
+int apmon_restart_needed(const char *running_sha256, const char *installed_sha256)
+{
+	if (running_sha256 == NULL || installed_sha256 == NULL) {
+		return -1;
+	}
+	if (running_sha256[0] == '\0' || installed_sha256[0] == '\0') {
+		return -1;
+	}
+	if (strcmp(running_sha256, installed_sha256) != 0) {
+		return 1;
+	}
+	return 0;
+}
+
+/* First 8 characters of a hash for -t tables, "-" when unknown */
+void apmon_short_hash(const char *hash, char out[9])
+{
+	if (hash == NULL || hash[0] == '\0') {
+		snprintf(out, 9, "-");
+		return;
+	}
+	snprintf(out, 9, "%.8s", hash);
+}

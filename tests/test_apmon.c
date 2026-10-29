@@ -665,8 +665,52 @@ static void test_log_follow(void)
 	unlink(outpath);
 }
 
+/* r13 identity: file hash, restart_needed, short hashes */
+static void test_identity(void)
+{
+	char path[] = "/tmp/apmon-test-hash.XXXXXX";
+	char a[65];
+	char b[65];
+	char shorth[9];
+	FILE *f;
+	int fd;
+
+	fd = mkstemp(path);
+	close(fd);
+	f = fopen(path, "w");
+	fputs("abc", f);
+	fclose(f);
+	CHECK(apmon_sha256_file(path, a) == 0, "identity: hash a file");
+	CHECK(strcmp(a, "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad") == 0,
+	      "identity: sha256(abc) as sha256sum");
+
+	/* same file again: same hash, no restart */
+	CHECK(apmon_sha256_file(path, b) == 0 && strcmp(a, b) == 0, "identity: hash is stable");
+	CHECK(apmon_restart_needed(a, b) == 0, "identity: same hash -> no restart");
+
+	/* binary replaced on disk (one byte appended) -> restart needed */
+	f = fopen(path, "a");
+	fputc('\n', f);
+	fclose(f);
+	CHECK(apmon_sha256_file(path, b) == 0 && strcmp(a, b) != 0, "identity: changed file, new hash");
+	CHECK(apmon_restart_needed(a, b) == 1, "identity: different hash -> restart needed");
+
+	/* unknown -> null */
+	CHECK(apmon_restart_needed(a, "") == -1, "identity: installed unknown -> null");
+	CHECK(apmon_restart_needed(NULL, b) == -1, "identity: running unknown (older beta) -> null");
+	CHECK(apmon_sha256_file("/nonexistent/apmond", b) == -1 && b[0] == '\0', "identity: missing file");
+
+	apmon_short_hash(a, shorth);
+	CHECK(strcmp(shorth, "ba7816bf") == 0, "identity: 8 character short hash");
+	apmon_short_hash(NULL, shorth);
+	CHECK(strcmp(shorth, "-") == 0, "identity: short hash of null is -");
+
+	unlink(path);
+}
+
 int main(void)
 {
+	test_identity();
 	test_logfile();
 	test_log_follow();
 	test_rfc5869();

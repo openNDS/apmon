@@ -34,7 +34,7 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
 
 `apmond` is also a thin ubus client of the running daemon. Output is JSON, indented as jq and apmond 1.x print it (two spaces; `ubus call apmond ...` keeps libubox's own format); add `-t` or `--table` for aligned tables.
 
-    apmond status                        this node: role and why, ULAs, collector, counters, debuglevel, blocks
+    apmond status                        this node: version and build identity, role and why, ULAs, collector, counters, debuglevel, blocks
     apmond nodes                         collector: every node with its info, APs and clients (as 1.x show_ap_data)
     apmond node <node_mac>               collector: one node, same layout as nodes
     apmond clients [node_mac]            collector: flat client list, by node then MAC (stale ones marked stale*)
@@ -90,3 +90,17 @@ Any program on a node can attach a JSON object to that node's reports:
     ubus call apmond remove_block '{"name":"mesh"}'
 
 The collector shows it in `apmond node <node_mac>` under `blocks.mesh` (and in `apmond nodes`). Names: 1–32 of `a-z 0-9 _ -`; data up to 16 KiB; up to 16 blocks; RAM only; `ttl` (seconds) makes a block expire unless it is set again. This is how a rewritten mesh11sd can add its mesh data without its own reporting code. See docs/PROTOCOL.md section 9.
+
+## Which code is running
+
+Every node reports, right after `apmond_version`, `package_version` (eg 2.0.0_beta-r13),
+`build_commit`, `running_sha256` (the binary that is running, hashed at startup),
+`installed_sha256` (`/usr/sbin/apmond` on disk, re-hashed when it changes) and
+`restart_needed` (true when they differ). `apmond status`, `apmond nodes` and `apmond node <mac>`
+show them; `apmond -t nodes` has a line per node such as
+
+    build 2.0.0_beta-r13 3aa8f8d  running 8a681eac  installed 8a681eac
+
+ending in `RESTART NEEDED` when the installed binary is not the one running. The package
+restarts apmond itself on an `apk` upgrade, so this normally shows only after a manual copy.
+Nodes running a 2.0 beta before r13 show these fields as null.

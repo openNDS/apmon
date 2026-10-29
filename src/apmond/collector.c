@@ -714,6 +714,15 @@ static const char *role_name(void)
 	return "unknown";
 }
 
+static void add_hash_or_null(const char *name, const char *hash)
+{
+	if (hash[0] != '\0') {
+		blobmsg_add_string(&bb, name, hash);
+	} else {
+		blobmsg_add_field(&bb, BLOBMSG_TYPE_UNSPEC, name, NULL, 0);
+	}
+}
+
 static int ubus_status(struct ubus_context *ctx, struct ubus_object *obj, struct ubus_request_data *req,
 		       const char *method, struct blob_attr *msg)
 {
@@ -723,6 +732,16 @@ static int ubus_status(struct ubus_context *ctx, struct ubus_object *obj, struct
 
 	blob_buf_init(&bb, 0);
 	blobmsg_add_string(&bb, "version", APMOND_VERSION);
+	apmond_identity_refresh();
+	blobmsg_add_string(&bb, "package_version", APMOND_PACKAGE_VERSION);
+	blobmsg_add_string(&bb, "build_commit", APMOND_BUILD_COMMIT);
+	add_hash_or_null("running_sha256", apmond.running_sha256);
+	add_hash_or_null("installed_sha256", apmond.installed_sha256);
+	if (apmond_restart_needed() < 0) {
+		blobmsg_add_field(&bb, BLOBMSG_TYPE_UNSPEC, "restart_needed", NULL, 0);
+	} else {
+		blobmsg_add_u8(&bb, "restart_needed", (uint8_t)apmond_restart_needed());
+	}
 	blobmsg_add_u32(&bb, "protocol", APMON_VERSION);
 	blobmsg_add_string(&bb, "id", apmond.id_str);
 	blobmsg_add_string(&bb, "role", role_name());
@@ -1011,6 +1030,31 @@ static void add_client(struct client *c, struct node *n, uint64_t now, int with_
  * uptime, load, memory, node_ula, ipv4_addresses), the collector's view of it (state, age,
  * source, counters), its radios/APs, blocks and its clients nested under it, sorted by MAC.
  */
+/* Does a report's node table carry the r13 identity fields? */
+static int has_identity(struct blob_attr *info)
+{
+	struct blob_attr *cur;
+	size_t rem;
+
+	blobmsg_for_each_attr(cur, info, rem) {
+		if (strcmp(blobmsg_name(cur), "package_version") == 0) {
+			return 1;
+		}
+	}
+	return 0;
+}
+
+static void add_identity_nulls(void)
+{
+	static const char *names[] = { "package_version", "build_commit", "running_sha256", "installed_sha256",
+				       "restart_needed" };
+	size_t i;
+
+	for (i = 0; i < sizeof(names) / sizeof(names[0]); i++) {
+		blobmsg_add_field(&bb, BLOBMSG_TYPE_UNSPEC, names[i], NULL, 0);
+	}
+}
+
 static void add_node_fields(struct node *n, uint64_t now)
 {
 	struct blob_attr *info = report_part(n, "node");
@@ -1031,6 +1075,10 @@ static void add_node_fields(struct node *n, uint64_t now)
 				continue;
 			}
 			blobmsg_add_blob(&bb, cur);
+			if (strcmp(blobmsg_name(cur), "apmond_version") == 0 && !has_identity(info)) {
+				/* an older 2.0 beta without the identity fields */
+				add_identity_nulls();
+			}
 		}
 	}
 	blobmsg_add_string(&bb, "state", node_state(n, now));

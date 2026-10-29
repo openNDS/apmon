@@ -27,6 +27,38 @@ target_include_directories(apmon PUBLIC src/lib)
 set_property(TARGET apmon PROPERTY POSITION_INDEPENDENT_CODE ON)
 target_link_libraries(apmon PUBLIC mbedcrypto m)
 
+# Build identity (apmond package_version / build_commit). The OpenWrt Makefile passes both;
+# a host build uses git describe / git rev-parse, else "dev" / a .build_commit file / "unknown".
+if(NOT DEFINED APMOND_PACKAGE_VERSION)
+	set(APMOND_PACKAGE_VERSION "")
+endif()
+if(APMOND_PACKAGE_VERSION STREQUAL "" AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+	execute_process(COMMAND git describe --tags --always --dirty
+			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+			OUTPUT_VARIABLE APMOND_PACKAGE_VERSION
+			OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+	if(APMOND_PACKAGE_VERSION STREQUAL "")
+		set(APMOND_PACKAGE_VERSION "dev")
+	endif()
+endif()
+# .build_commit first: inside an OpenWrt buildroot, git would find the buildroot's own repository
+if(NOT DEFINED APMOND_BUILD_COMMIT)
+	set(APMOND_BUILD_COMMIT "")
+endif()
+if(APMOND_BUILD_COMMIT STREQUAL "" AND EXISTS ${CMAKE_SOURCE_DIR}/.build_commit)
+	file(STRINGS ${CMAKE_SOURCE_DIR}/.build_commit APMOND_BUILD_COMMIT LIMIT_COUNT 1)
+endif()
+if(APMOND_BUILD_COMMIT STREQUAL "" AND EXISTS ${CMAKE_SOURCE_DIR}/.git)
+	execute_process(COMMAND git rev-parse --short=7 HEAD
+			WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+			OUTPUT_VARIABLE APMOND_BUILD_COMMIT
+			OUTPUT_STRIP_TRAILING_WHITESPACE ERROR_QUIET)
+endif()
+if(APMOND_BUILD_COMMIT STREQUAL "")
+	set(APMOND_BUILD_COMMIT "unknown")
+endif()
+message(STATUS "apmond build ${APMOND_PACKAGE_VERSION} ${APMOND_BUILD_COMMIT}")
+
 if(BUILD_DAEMON)
 	add_executable(apmond
 		src/apmond/main.c
@@ -40,7 +72,11 @@ if(BUILD_DAEMON)
 		src/apmond/ula.c
 		src/apmond/blocks.c
 		src/apmond/cli.c
+		src/apmond/identity.c
 	)
+	target_compile_definitions(apmond PRIVATE
+		APMOND_PACKAGE_VERSION="${APMOND_PACKAGE_VERSION}"
+		APMOND_BUILD_COMMIT="${APMOND_BUILD_COMMIT}")
 	target_link_libraries(apmond apmon ubox ubus uci blobmsg_json microhttpd)
 	install(TARGETS apmond RUNTIME DESTINATION sbin)
 endif()

@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=apmond
 PKG_VERSION:=2.0.0_beta
-PKG_RELEASE:=12
+PKG_RELEASE:=13
 
 PKG_SOURCE:=apmon-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openNDS/apmon/tar.gz/v$(PKG_VERSION)?
@@ -41,7 +41,13 @@ define Package/apmond/conffiles
 /etc/config/apmond
 endef
 
+# Build identity: the commit comes from PKG_SOURCE_VERSION when set, else from .build_commit
+# in the source (written by the release/build script), else "unknown" (see CMakeLists.txt).
+APMOND_BUILD_COMMIT:=$(if $(PKG_SOURCE_VERSION),$(shell echo $(PKG_SOURCE_VERSION) | cut -c1-7))
+
 CMAKE_OPTIONS += -DBUILD_DAEMON=ON -DBUILD_TESTS=OFF -DCRYPTO_BACKEND=mbedtls
+CMAKE_OPTIONS += -DAPMOND_PACKAGE_VERSION=$(PKG_VERSION)-r$(PKG_RELEASE)
+CMAKE_OPTIONS += -DAPMOND_BUILD_COMMIT=$(APMOND_BUILD_COMMIT)
 
 define Package/apmond/install
 	$(INSTALL_DIR) $(1)/usr/sbin

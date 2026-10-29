@@ -164,6 +164,9 @@ struct apmon_table {
 };
 
 int apmon_sha256(const uint8_t *data, size_t len, uint8_t out[32]);
+int apmon_sha256_file(const char *path, char hex[65]);
+int apmon_restart_needed(const char *running_sha256, const char *installed_sha256);
+void apmon_short_hash(const char *hash, char out[9]);
 int apmon_ula_prefix(const char *passphrase, uint8_t out[8]);
 void apmon_eui64_iid(const uint8_t mac[APMON_ID_LEN], uint8_t out[8]);
 int apmon_block_name_valid(const char *name);

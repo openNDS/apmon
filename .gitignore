@@ -1,2 +1,3 @@
 build/
 tests/test_apmon
+.build_commit

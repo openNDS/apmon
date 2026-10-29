@@ -545,6 +545,40 @@ static void add_state(struct apmon_table *t, struct blob_attr *c, int *stale)
 	}
 }
 
+/* A string field, or NULL when absent or null (older 2.0 betas) */
+static const char *string_field(struct blob_attr *table, const char *name)
+{
+	struct blob_attr *f = field(table, name);
+
+	if (f == NULL || blobmsg_type(f) != BLOBMSG_TYPE_STRING) {
+		return NULL;
+	}
+	return blobmsg_get_string(f);
+}
+
+/* "    build 2.0.0_beta-r13 3aa8f8d  running 8a681eac  installed 8a681eac[  RESTART NEEDED]" */
+static void print_build_line(struct blob_attr *n)
+{
+	const char *version = string_field(n, "package_version");
+	const char *commit = string_field(n, "build_commit");
+	char running[9];
+	char installed[9];
+	const char *marker = "";
+
+	apmon_short_hash(string_field(n, "running_sha256"), running);
+	apmon_short_hash(string_field(n, "installed_sha256"), installed);
+	if (apmon_restart_needed(string_field(n, "running_sha256"), string_field(n, "installed_sha256")) == 1) {
+		marker = "  RESTART NEEDED";
+	}
+	if (version == NULL) {
+		version = "-";
+	}
+	if (commit == NULL) {
+		commit = "-";
+	}
+	printf("    build %s %s  running %s  installed %s%s\n", version, commit, running, installed, marker);
+}
+
 /* One node as 1.x show_ap_data: a header block, then its APs and its clients */
 static void print_node_block(struct blob_attr *n, int *stale)
 {
@@ -575,6 +609,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 	join_array(field(n, "load"), " ", e, sizeof(e));
 	printf("    model %s  release %s  apmond %s\n", text_of(n, "model", b, sizeof(b)),
 	       text_of(n, "openwrt_release", c1, sizeof(c1)), text_of(n, "apmond_version", d, sizeof(d)));
+	print_build_line(n);
 	printf("    uptime %s  load %s  free RAM %s KiB  free flash %s KiB\n", a, e,
 	       text_of(n, "free_ram_kb", b, sizeof(b)), text_of(n, "free_flash_kb", c1, sizeof(c1)));
 	join_array(field(n, "ipv4_addresses"), ", ", e, sizeof(e));

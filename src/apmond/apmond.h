@@ -15,6 +15,15 @@
 
 #define APMOND_VERSION "2.0.0beta"
 
+/* Baked in at build time (CMake -D, from the OpenWrt Makefile); see CMakeLists.txt */
+#ifndef APMOND_PACKAGE_VERSION
+#define APMOND_PACKAGE_VERSION "dev"
+#endif
+#ifndef APMOND_BUILD_COMMIT
+#define APMOND_BUILD_COMMIT "unknown"
+#endif
+#define APMOND_INSTALL_PATH "/usr/sbin/apmond"
+
 struct apmond_config {
 	int enabled;
 	char role[16];             /* auto | collector | sender */
@@ -70,6 +79,10 @@ struct apmond {
 	int last_status;
 	uint64_t reports_sent;
 	uint64_t reports_failed;
+
+	/* identity of the code (identity.c): empty hash = unknown */
+	char running_sha256[65];
+	char installed_sha256[65];
 };
 
 extern struct apmond apmond;
@@ -136,3 +149,8 @@ void apmond_collector_housekeeping(void);
 /* http_client.c */
 int apmond_http_post(const char *host, int port, const char *path, const uint8_t *body, size_t len,
 		     int timeout_s, int *status, uint8_t **resp, size_t *resp_len);
+
+/* identity.c: sha256 of the running and the installed binary */
+void apmond_identity_init(void);
+void apmond_identity_refresh(void);
+int apmond_restart_needed(void);
