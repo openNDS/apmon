@@ -20,7 +20,7 @@ Confidentiality, integrity and authenticity come from AES-256-GCM over the paylo
 | Item | Value |
 |---|---|
 | Protocol | HTTP/1.1, plain TCP, IPv6 (ULA) preferred, IPv4 allowed |
-| Port | **TCP 2468** by default (uci `apmond.setup.port`). Chosen to be clear of 80/443 (uhttpd), 2050 (openNDS) and other common OpenWrt services |
+| Port | Configurable with uci option **`apmond.setup.port`**, **default TCP 2468**. Every node MUST use the same value (senders connect to it, the collector listens on it). 2468 is clear of 80/443 (uhttpd), 2050 (openNDS) and other common OpenWrt services |
 | Report path | `POST /apmon/v2/report` |
 | Time sync path | `POST /apmon/v2/time` |
 | Request `Content-Type` | `application/vnd.apmon.v2` (anything else: 415) |
@@ -58,7 +58,7 @@ All integers are unsigned, **big-endian**.
 | 0 | 4 | `magic` | ASCII `APM2` (`41 50 4d 32`) |
 | 4 | 1 | `version` | `2` |
 | 5 | 1 | `type` | see table below |
-| 6 | 2 | `flags` | bit 0 `CLOCK_FROM_COLLECTOR`: sender's timestamp is collector-referenced (section 5); bit 1 `DEFAULT_PASSPHRASE`: sender uses the built-in passphrase; bits 2–15 reserved, MUST be 0 (else 400) |
+| 6 | 2 | `flags` | bit 0 `CLOCK_FROM_COLLECTOR`: sender's timestamp is collector-referenced (section 5); bit 1 `DEFAULT_PASSPHRASE`: sender uses the built-in passphrase; bits 2–15 reserved, MUST be 0 (else 400). Bit 2 is earmarked for a future `COMPRESSED` payload; 2.0 does **not** compress |
 | 8 | 4 | `key_epoch` | key generation, uci `key_epoch` (default 0), see section 4 |
 | 12 | 6 | `sender_id` | the node's id: MAC of `option device` (br-lan), as 1.x `device_mac`. For collector→sender messages, the collector's id |
 | 18 | 2 | `reserved` | MUST be 0 |
@@ -82,21 +82,35 @@ A receiver MUST reject a `type` it does not expect in that direction or on that 
 
 ## 4. Key derivation
 
-Input keying material is the shared passphrase, `apmond.setup.apmon_seed` (same uci option as 1.x, same on every node).
-If unset, the built-in default `--__` is used (as 1.x and mesh11sd), `DEFAULT_PASSPHRASE` is set in every header, and apmond logs the existing periodic notice.
+The shared passphrase is uci `apmond.setup.apmon_seed` (same option name as 1.x, identical on every node).
+If it is unset, a built-in default passphrase is used so apmond works out of the box (as 1.x and mesh11sd). In that case the `DEFAULT_PASSPHRASE` header flag is set on every message, the report carries `"default_passphrase": true`, both sender and collector log the periodic notice, and `ubus call apmond status` / LuCI show a warning. The default passphrase gives no real protection.
 
-HKDF-SHA256 (RFC 5869), implemented on mbedtls HMAC-SHA256 (`MBEDTLS_HKDF_C` is not enabled in OpenWrt's mbedtls):
+Two standard steps, both on mbedtls primitives available in OpenWrt 25.12:
+
+1. **PBKDF2-HMAC-SHA256** (RFC 8018) stretches the passphrase, so a weak one is expensive to guess offline. mbedtls: `mbedtls_pkcs5_pbkdf2_hmac_ext()` (`MBEDTLS_PKCS5_C`, enabled in OpenWrt's libmbedtls 3.6.7).
+2. **HKDF-SHA256** (RFC 5869) derives the separate working keys. Implemented in libapmon on mbedtls HMAC-SHA256, because OpenWrt builds mbedtls with `MBEDTLS_HKDF_C` off.
 
 ```
-IKM   = apmon_seed as raw UTF-8 bytes (no trailing newline)
+IKM   = PBKDF2-HMAC-SHA256(password = apmon_seed as raw UTF-8 bytes (no trailing newline),
+                           salt = "apmon/2 pbkdf2", iterations = 50000, dkLen = 32)
 PRK   = HKDF-Extract(salt = "apmon/2 salt", IKM)
 K_s2c = HKDF-Expand(PRK, info = "apmon/2 s2c" || u32be(key_epoch), L = 32)   # sender -> collector
 K_c2s = HKDF-Expand(PRK, info = "apmon/2 c2s" || u32be(key_epoch), L = 32)   # collector -> sender
 ```
 
-(strings are ASCII, no terminator). Separate keys per direction mean a collector reply can never be replayed to the collector as a report, even before the `type` check.
+All strings are ASCII without a terminator.
 
-`key_epoch` allows a passphrase change without a flag day: the collector MAY hold keys for the current and previous epoch (uci `accept_previous_epoch`, default off). The ULA prefix and subnet continue to be derived from `sha256(apmon_seed)` exactly as in 1.x, so addressing is unchanged; that derivation is independent of these keys.
+| Constant | Value | Notes |
+|---|---|---|
+| PBKDF2 salt | `apmon/2 pbkdf2` | fixed protocol constant. Every node must derive the same key without any exchange, so the salt cannot be random; a per-network salt would need a second shared value. The cost of a fixed salt is that one precomputed dictionary works against every apmon network, which the iteration count only slows down |
+| PBKDF2 iterations | **50000** | fixed protocol constant, not configurable (all nodes must agree). Estimated ≈1 s on an MT7628 (MIPS 24KEc, 580 MHz): mbedtls SHA-256 there is roughly 6 MB/s, and one iteration is two 64-byte compressions. Still to be measured on the MT300N-v2 |
+| HKDF salt | `apmon/2 salt` | |
+
+The PBKDF2 step runs **once** at daemon start (and on reload), and the keys are kept in RAM, so the cost is not paid per message.
+
+Separate keys per direction mean a collector reply can never be replayed to the collector as a report, even before the `type` check.
+
+`key_epoch` (uci, default 0) allows a passphrase change without a flag day: the collector MAY hold keys for the current and previous epoch (uci `accept_previous_epoch`, default off). The ULA prefix and subnet continue to be derived from `sha256(apmon_seed)` exactly as in 1.x, so addressing is unchanged; that derivation is independent of these keys.
 
 ## 5. Time, replay window and nodes without a clock
 
@@ -104,9 +118,8 @@ Collector rules for every REPORT (after the GCM tag verifies — never before):
 
 1. **Window:** `|timestamp − collector_now| ≤ max_skew` (uci `max_age`, default **120 s**). Otherwise 409.
 2. **Nonce cache:** keep each accepted `(sender_id, nonce)` for `2 × max_skew`; a repeat is 409. Memory: one entry per accepted message, bounded by nodes × (240 s / interval).
-3. **Sequence:** per sender keep the last accepted `seq`; accept only `seq` "newer" in serial-number arithmetic (RFC 1982, 32-bit), or any `seq` when the previous accepted message is older than `max_skew` (daemon restart). Otherwise 409.
 
-(1)+(2) alone are sufficient against replay; (3) also rejects reordering within the window.
+(1) and (2) together are sufficient against replay. `seq` is used only to count lost reports (shown in `ubus call apmond nodes`), never to reject a message, so a sender that restarts never gets locked out.
 
 **Routers often boot without RTC or NTP.** So senders never rely on their own wall clock:
 
@@ -221,22 +234,23 @@ ubus events: `apmond.node.new`, `apmond.node.lost`, `apmond.client.roam`. ubus A
 - **Protected:** report contents (confidentiality), integrity and origin from a key holder, freshness (window + nonce + seq). Any node holding the passphrase can impersonate any other node id — membership is the passphrase, as in 1.x.
 - **Not protected (metadata):** who talks to whom, message size and timing, and the cleartext header: sender MAC, timestamp, sequence, key epoch and the default-passphrase flag. The MAC is already visible on the LAN anyway.
 - **No forward secrecy:** anyone who later learns the passphrase can decrypt captured traffic. Accepted for AP monitoring data; rotate with `key_epoch` if a passphrase leaks.
-- **Low-entropy passphrases:** HKDF does not slow down guessing; a captured message allows offline dictionary attacks on a weak passphrase. The default `--__` gives **no** security at all; it exists only to work out of the box, and both ends flag and log it. LuCI should show it prominently.
+- **Low-entropy passphrases:** a captured message allows an offline dictionary attack on the passphrase. PBKDF2 (50000 iterations) makes each guess cost about as much as 50000 HMACs, but a weak passphrase is still weak. The built-in default passphrase gives **no** security; it exists only so apmond works out of the box, and both ends flag and log it. LuCI should show it prominently.
 - **Nonces:** random 96-bit per message. At 1 message / 10 s per node, collision probability is negligible for decades; never use a counter-derived or fixed IV in production. Test vectors use fixed nonces **only** for testing.
 - **Parsing:** only the fixed header is parsed before authentication; JSON is parsed only after the tag verifies, with size and depth limits (depth ≤ 8, ≤ 512 clients per report).
-- **Exposure:** the listener binds to the ULA/LAN only; the firewall should not open TCP 2468 on WAN. Compared with 1.x, uhttpd, px5g and certificates go away. Note that 1.x TLS did not stop an active attacker either (`--no-check-certificate`).
+- **Exposure:** the listener binds to the ULA/LAN only; the firewall should not open the apmond port (default 2468) on WAN. Compared with 1.x, uhttpd, px5g and certificates go away. Note that 1.x TLS did not stop an active attacker either (`--no-check-certificate`).
 - **No downgrade:** there is no unencrypted or weaker mode.
+- **No compression** in 2.0 (avoids compression side channels and code); flag bit 2 is reserved for it.
 
 ## 11. Test vectors
 
-Generated by `tests/vectors/gen_vectors.py` (python3-cryptography 43). Includes a self-check against RFC 5869 test case A.1. All hex.
+Generated by `tests/vectors/gen_vectors.py` (python3-cryptography 43, Python `hashlib.pbkdf2_hmac`), which also writes `tests/vectors/vectors.h` for the C unit tests and self-checks HKDF against RFC 5869 test case A.1. All hex.
 
 ### Keys, key_epoch = 0
 
-| Passphrase | PRK | K_s2c | K_c2s |
-|---|---|---|---|
-| `--__` (default) | `ec3905a56147edab713d982a329b93524a91e711f258e895c68da6b2f30ceb89` | `fc9eb2c32146b28f6e4a89a819a5ae75dc22399e4fec2948d3224978e1c43f2a` | `c75d165ba959a88df4b60d07ae1f3633ad37e56be1df618fc8c2a936f9962cb2` |
-| `correct horse battery staple` | `89ae5cf88181245b7047eeeb07edb38875b37e09c487cf0fb13e247f8a4e6a44` | `ba0202623a777230cecfd27ce2217fbd4e4f293f57ce12424a6a4b10797fd4aa` | `583c67d01ed67a4a05f2c50bb4c784baa013952cfc045307a61bca13690318dd` |
+| Passphrase | IKM (PBKDF2) | PRK | K_s2c | K_c2s |
+|---|---|---|---|---|
+| built-in default | `9fcee92b4108a1c6d735be4bd3de6d0dd9e12c9b6c4ea3de868a2fe22ddc6ea9` | `a90f1b3bcdd6da7dc941a298c2f2a16e21371f09b2592d03929c34974464d0f6` | `904458537dddfd255917133e3401e6af110e21a0b94a21a2c0bc78421beffde3` | `0f3aff2fbc92efc5c75c5f865ab039572729d6717ccc18569b0f90d6f261ee45` |
+| `correct horse battery staple` | `477c1958224f8916af4307f7a4fc879a30517c21c077bf112aa964673ff97516` | `d532e986fa0d33454b5934e0c00516470b8fcc0b775200afd1c47bc2166779c1` | `04535a5c12a1edaa5128cfbf6b2aa1217fafea6eca720567af8d045f53918970` | `200caea0ac4af1c794a6f9e89c2a668d09190064ed400dbd35cf1cefeed2d420` |
 
 ### REPORT (passphrase `correct horse battery staple`, K_s2c)
 
@@ -253,9 +267,9 @@ Header (= AAD):
 Full message (header ‖ ciphertext ‖ tag):
 ```
 41504d3202010000000000009483c4a1b2c30000000001a1873ec4000000002a000102030405060708090a0b00000081
-bd1108221a083c95c29fedf3f40f9202b6d6f7fa22baadf2a42783aab2283136a1eb40e4465dce0a7f8c8d5f075958c8
-e98b79495b66549a62637325a1621bc4717ecaa4e334e09257138c6676cf093ff0c78798948444af2bd669cbe1dc921e
-98cf7510be204280b85aefb732cba93bc670e9861df1bcd81f8c2e197b24285e98
+d3444498145f9d0550e98fe6c6bc44b24de70856674bd68e2d8236352a2378c1cc30907277999575350006838557ea20
+2062b62754d47becc6dbed56f5d157d6284a596f5c4affbe2336dfebd30122ab6014642e0de640ee888a0dc570a3a7d6
+cfba4539a8f7354ef390d17ec099a8bcb427d672f013cd7c212ad212f81c17213b
 ```
 
 ### ACK (K_c2s)
@@ -269,16 +283,13 @@ Plaintext:
 Full message:
 ```
 41504d3202810000000000009483c40000010000000001a1873ec4fa000000070b0a0908070605040302010000000087
-f798093c53ff01d7dd6f4baca3dbdd7e4543d6426c3dea795bb4c090ede318fc977b39bd445600ba5579a66e8ecdba2a
-9b3603c0b3cdf2239aeaba41a45b2ae89263872da97f21b3d15868c115a1807c6e42cc49397a7368d4ddd5055349d7de
-cbf66da65f1d76021232309ec2a73e9b362722ac6d53b9c931a605de85bd0b921fe597a964294f
+76ad62238463f6f12f0ffde3b8637c5e6fec31936202ba1c6249cf2eeac57effc4117992b35f87f3597b9cdcdab6e09c
+6890d0970314c7483a6b9401fe1b58a94af73ac36574373284f119e0a528bbd5ea9dbabdc992269754fa91062cdd0852
+a14784e82e8aea974bb70e7d7052494464508c89e7570c381c21e6807b64154843aab0d78b0ad9
 ```
 
-Negative tests implementations MUST pass: flip any header byte → 401 (tag fails); flip any ciphertext byte → 401; same message twice → 2nd is 409; timestamp ±121 s → 409; `ct_len` ≠ body − 48 → 400; reserved flag bit set → 400; version 3 → 426.
+Negative tests implementations MUST pass: flip any header byte → 401 (tag fails); flip any ciphertext byte → 401; same message twice → 2nd is 409 (nonce cache); timestamp ±121 s → 409; `ct_len` ≠ body − 48 → 400; reserved flag bit set → 400; version 3 → 426.
 
 ## 12. Open questions
 
-1. Port 2468 — acceptable, or prefer another?
-2. Stretch the passphrase (PBKDF2-SHA256, available in mbedtls as `mbedtls_pkcs5_pbkdf2_hmac_ext`) before HKDF, once at startup? Costs ~1 s on an MT7628 at boot, makes weak passphrases much harder to guess offline.
-3. Should the default passphrase refuse to run at all in 2.0 (opt-in `allow_default_passphrase`), or keep "works out of the box" with warnings?
-4. Compress the plaintext (flag bit) for large client lists, or not needed on LANs?
+1. Measure the PBKDF2 cost on the MT300N-v2 (`apmond bench`) and adjust the constant **before** 2.0.0 is released; after release it can only change with a protocol version bump.
