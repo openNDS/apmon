@@ -8,7 +8,7 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=apmond
 PKG_VERSION:=2.0.0_beta
-PKG_RELEASE:=18
+PKG_RELEASE:=19
 
 PKG_SOURCE:=apmon-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openNDS/apmon/tar.gz/v$(PKG_VERSION)?
@@ -28,7 +28,7 @@ define Package/apmond
   TITLE:=Access point monitoring daemon (protocol 2, C)
   URL:=https://github.com/openNDS/apmon
   USERID:=apmond=468:apmond=468
-  DEPENDS:=+libubox +libubus +libuci +libblobmsg-json +libmbedtls +libmicrohttpd-no-ssl +rpcd-mod-iwinfo
+  DEPENDS:=+libubox +libubus +libuci +libblobmsg-json +libmbedtls +libmicrohttpd-no-ssl
 endef
 
 define Package/apmond/description

@@ -109,6 +109,16 @@ int apmond_ula_holding_router(void);
 int apmond_ula_node_ready(void);
 
 /* vlan.c */
+/* nl80211.c */
+#define APMOND_MAX_WIPHY 8
+struct apmond_wiphy_caps {
+	int count;
+	int wiphy[APMOND_MAX_WIPHY];
+	int family[APMOND_MAX_WIPHY][APMON_BANDS];
+};
+int apmond_nl80211_snapshot(struct apmon_wifi_iface *ifs, int max, int *count, struct apmond_wiphy_caps *caps);
+int apmond_nl80211_stations(int ifindex, struct apmon_wifi_sta *stas, int max);
+
 int apmond_port_vlan(const char *port, uint64_t now_ms);
 int apmond_port_vxlan(const char *port, uint64_t now_ms, uint32_t *vni, char *device, size_t device_len);
 void apmond_ula_cleanup(void);

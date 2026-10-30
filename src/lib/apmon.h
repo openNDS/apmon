@@ -276,3 +276,65 @@ void apmon_table_free(struct apmon_table *t);
 /* kdf.c: keys for the current and the previous epoch from one PBKDF2 run */
 int apmon_derive_keys_with_previous(const char *passphrase, uint32_t epoch, struct apmon_keys *current,
 				    struct apmon_keys *previous);
+
+/* ---------- Wi-Fi via nl80211 (wifi_parse.c; the I/O is in the daemon's nl80211.c) ---------- */
+
+#define APMON_FAMILY_NONE 0
+#define APMON_FAMILY_HT 1
+#define APMON_FAMILY_VHT 2
+#define APMON_FAMILY_HE 3
+#define APMON_FAMILY_EHT 4
+/* nl80211 bands: 2.4, 5, 60, 6 GHz, S1G, LC */
+#define APMON_BANDS 6
+
+struct apmon_wifi_iface {
+	int ifindex;
+	char ifname[16];
+	uint8_t mac[APMON_ID_LEN];
+	int have_mac;
+	char ssid[33];
+	int have_ssid;
+	int iftype;		/* NL80211_IFTYPE_* */
+	int wiphy;		/* -1 unknown */
+	int freq;		/* MHz, 0 unknown */
+	int width;		/* NL80211_CHAN_WIDTH_*, -1 unknown */
+	int txpower_mbm;
+	int have_txpower;
+};
+
+#define APMON_STA_INACTIVE 0x001
+#define APMON_STA_CONNECTED 0x002
+#define APMON_STA_RX_BYTES 0x004
+#define APMON_STA_TX_BYTES 0x008
+#define APMON_STA_TX_RETRIES 0x010
+#define APMON_STA_SIGNAL 0x020
+#define APMON_STA_SIGNAL_AVG 0x040
+#define APMON_STA_ACK_SIGNAL_AVG 0x080
+#define APMON_STA_TX_RATE 0x100
+#define APMON_STA_RX_RATE 0x200
+
+struct apmon_wifi_sta {
+	uint8_t mac[APMON_ID_LEN];
+	unsigned int have;	/* APMON_STA_* */
+	uint32_t inactive_ms;
+	uint32_t connected_s;
+	uint64_t rx_bytes;
+	uint64_t tx_bytes;
+	uint32_t tx_retries;
+	int signal;
+	int signal_avg;
+	int ack_signal_avg;
+	uint32_t tx_rate_kbps;
+	uint32_t rx_rate_kbps;
+};
+
+const void *apmon_nla_find(const void *data, size_t len, int type, size_t *out_len);
+int apmon_nl80211_parse_iface(const void *attrs, size_t len, struct apmon_wifi_iface *out);
+int apmon_nl80211_parse_station(const void *attrs, size_t len, struct apmon_wifi_sta *out);
+int apmon_nl80211_parse_wiphy(const void *attrs, size_t len, int families[APMON_BANDS]);
+int apmon_freq_band(int freq);
+int apmon_freq_to_channel(int freq);
+int apmon_htmode_family(const char *htmode);
+int apmon_wider_width(int a, int b);
+int apmon_htmode_string(int family, int width, char *out, size_t len);
+const char *apmon_iftype_name(int iftype);

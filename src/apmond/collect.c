@@ -1,5 +1,5 @@
 /*
- * apmond data collection: node status, radios and Wi-Fi clients (ubus iwinfo), wired clients (bridge fdb)
+ * apmond data collection: node status, radios and Wi-Fi clients (nl80211), wired clients (bridge fdb)
  * Builds the REPORT plaintext described in docs/PROTOCOL.md section 6.
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -16,6 +16,7 @@
 #include <sys/sysinfo.h>
 #include <unistd.h>
 
+#include <linux/nl80211.h>
 #include <libubox/blobmsg_json.h>
 #include <uci.h>
 
@@ -116,84 +117,6 @@ int apmond_ubus_call(struct ubus_context *ctx, const char *object, const char *m
 		return -1;
 	}
 	return 0;
-}
-
-static struct blob_attr *find_attr(struct blob_attr *table, const char *name)
-{
-	struct blob_attr *cur;
-	size_t rem;
-
-	if (table == NULL) {
-		return NULL;
-	}
-	blob_for_each_attr(cur, table, rem) {
-		if (strcmp(blobmsg_name(cur), name) == 0) {
-			return cur;
-		}
-	}
-	return NULL;
-}
-
-static struct blob_attr *find_in_table(struct blob_attr *table, const char *name)
-{
-	struct blob_attr *cur;
-	size_t rem;
-
-	if (table == NULL) {
-		return NULL;
-	}
-	blobmsg_for_each_attr(cur, table, rem) {
-		if (strcmp(blobmsg_name(cur), name) == 0) {
-			return cur;
-		}
-	}
-	return NULL;
-}
-
-static int attr_int(struct blob_attr *a, int64_t *out)
-{
-	if (a == NULL) {
-		return -1;
-	}
-	switch (blobmsg_type(a)) {
-	case BLOBMSG_TYPE_INT8:
-		*out = blobmsg_get_u8(a);
-		return 0;
-	case BLOBMSG_TYPE_INT16:
-		*out = (int16_t)blobmsg_get_u16(a);
-		return 0;
-	case BLOBMSG_TYPE_INT32:
-		*out = (int32_t)blobmsg_get_u32(a);
-		return 0;
-	case BLOBMSG_TYPE_INT64:
-		*out = (int64_t)blobmsg_get_u64(a);
-		return 0;
-	case BLOBMSG_TYPE_DOUBLE:
-		*out = (int64_t)blobmsg_get_double(a);
-		return 0;
-	default:
-		return -1;
-	}
-}
-
-static void json_int_attr(struct apmon_json *j, const char *key, struct blob_attr *a)
-{
-	int64_t v;
-
-	if (attr_int(a, &v) == 0) {
-		apmon_json_int(j, key, v);
-	} else {
-		apmon_json_null(j, key);
-	}
-}
-
-static void json_string_attr(struct apmon_json *j, const char *key, struct blob_attr *a)
-{
-	if (a != NULL && blobmsg_type(a) == BLOBMSG_TYPE_STRING) {
-		apmon_json_string(j, key, blobmsg_get_string(a));
-	} else {
-		apmon_json_null(j, key);
-	}
 }
 
 /* ---------- node ---------- */
@@ -367,7 +290,10 @@ static void add_node(struct apmond *a, struct apmon_json *j)
 	apmon_json_close_object(j);
 }
 
-/* ---------- Wi-Fi: ubus iwinfo (rpcd-mod-iwinfo) ---------- */
+/* ---------- Wi-Fi: nl80211 (nl80211.c) and uci wireless ---------- */
+
+#define MAX_WIFI_IFACES 32
+#define MAX_STATIONS 256
 
 struct wifi_macs {
 	char mac[MAX_WIFI_MACS][18];
@@ -375,21 +301,6 @@ struct wifi_macs {
 	char ifnames[32][IFNAMSIZ];
 	int if_count;
 };
-
-static struct blob_attr *iwinfo_call(struct apmond *a, const char *method, const char *device)
-{
-	struct blob_buf b;
-	struct blob_attr *out = NULL;
-
-	memset(&b, 0, sizeof(b));
-	blob_buf_init(&b, 0);
-	if (device != NULL) {
-		blobmsg_add_string(&b, "device", device);
-	}
-	apmond_ubus_call(a->ubus, "iwinfo", method, b.head, &out);
-	blob_buf_free(&b);
-	return out;
-}
 
 /* "vlan": N, or null when the port has no access VLAN */
 static void json_vlan(struct apmon_json *j, int vid)
@@ -417,228 +328,304 @@ static void json_vxlan(struct apmon_json *j, const char *port, uint64_t now_ms)
 	apmon_json_close_object(j);
 }
 
-static void add_wifi_client(struct apmon_json *j, struct blob_attr *sta, const char *ifname, struct blob_attr *info,
-			    uint64_t now_ms,
-			    struct wifi_macs *macs)
+static void json_flag_int(struct apmon_json *j, const char *key, unsigned int have, unsigned int flag, int64_t v)
 {
-	struct blob_attr *mac = find_in_table(sta, "mac");
-	struct blob_attr *rx = find_in_table(sta, "rx");
-	struct blob_attr *tx = find_in_table(sta, "tx");
-	int64_t inactive = 0;
-	char lower[18];
-	int i;
-
-	if (mac == NULL || blobmsg_type(mac) != BLOBMSG_TYPE_STRING) {
-		return;
+	if (have & flag) {
+		apmon_json_int(j, key, v);
+	} else {
+		apmon_json_null(j, key);
 	}
-
-	snprintf(lower, sizeof(lower), "%s", blobmsg_get_string(mac));
-	for (i = 0; lower[i] != '\0'; i++) {
-		if (lower[i] >= 'A' && lower[i] <= 'F') {
-			lower[i] = (char)(lower[i] - 'A' + 'a');
-		}
-	}
-
-	if (macs->count < MAX_WIFI_MACS) {
-		snprintf(macs->mac[macs->count], 18, "%s", lower);
-		macs->count++;
-	}
-
-	attr_int(find_in_table(sta, "inactive"), &inactive);
-
-	apmon_json_open_object(j, NULL);
-	apmon_json_string(j, "client_mac", lower);
-	apmon_json_string(j, "kind", "wifi");
-	json_string_attr(j, "ap_ssid", find_attr(info, "ssid"));
-	apmon_json_string(j, "ap_ifname", ifname);
-	json_string_attr(j, "ap_bssid", find_attr(info, "bssid"));
-	json_vlan(j, apmond_port_vlan(ifname, now_ms));
-	json_vxlan(j, ifname, now_ms);
-	json_int_attr(j, "signal_avg_dbm", find_in_table(sta, "signal_avg"));
-	json_int_attr(j, "signal_dbm", find_in_table(sta, "signal"));
-	json_int_attr(j, "ack_signal_avg_dbm", find_in_table(sta, "ack_signal_avg"));
-	json_int_attr(j, "tx_bitrate_kbps", find_in_table(tx, "rate"));
-	json_int_attr(j, "rx_bitrate_kbps", find_in_table(rx, "rate"));
-	json_int_attr(j, "tx_bytes", find_in_table(tx, "bytes"));
-	json_int_attr(j, "rx_bytes", find_in_table(rx, "bytes"));
-	json_int_attr(j, "tx_retries", find_in_table(tx, "retries"));
-	json_int_attr(j, "connected_s", find_in_table(sta, "connected_time"));
-	apmon_json_int(j, "inactive_ms", inactive);
-	apmon_json_int(j, "last_seen", (int64_t)now_ms - inactive);
-	apmon_json_close_object(j);
 }
 
-/* Writes "radios" and returns the Wi-Fi clients JSON fragments into clients_json */
-#define MAX_APS 16
-
-struct ap_info {
-	const char *ifname;
-	struct blob_attr *info;
-	const char *phy;
+/* What uci wireless says about one interface (matched by option ifname, which netifd and mesh11sd set) */
+struct uci_wifi {
+	int found;
+	char encryption[32];
+	char mesh_id[64];
+	char htmode[16];
 };
 
-static const char *info_phy(struct blob_attr *info)
+static void uci_wifi_lookup(struct uci_context *ctx, struct uci_package *pkg, const char *ifname, struct uci_wifi *out)
 {
-	struct blob_attr *phy = find_attr(info, "phy");
-
-	if (phy == NULL || blobmsg_type(phy) != BLOBMSG_TYPE_STRING) {
-		return "";
-	}
-	return blobmsg_get_string(phy);
-}
-
-/* A string attribute, or NULL */
-static const char *attr_string(struct blob_attr *a)
-{
-	if (a == NULL || blobmsg_type(a) != BLOBMSG_TYPE_STRING) {
-		return NULL;
-	}
-	return blobmsg_get_string(a);
-}
-
-/*
- * uci wireless: the htmode of the wifi-device that the wifi-iface with option ifname <ifname>
- * belongs to (mesh11sd and netifd set ifname on every interface they manage); -1 if none.
- */
-static int uci_radio_htmode(const char *ifname, char *out, size_t len)
-{
-	struct uci_context *ctx = uci_alloc_context();
-	struct uci_package *pkg = NULL;
 	struct uci_element *e;
-	int ret = -1;
 
-	if (ctx == NULL) {
-		return -1;
-	}
-	if (uci_load(ctx, "wireless", &pkg) != UCI_OK || pkg == NULL) {
-		uci_free_context(ctx);
-		return -1;
+	memset(out, 0, sizeof(*out));
+	if (ctx == NULL || pkg == NULL) {
+		return;
 	}
 	uci_foreach_element(&pkg->sections, e) {
 		struct uci_section *iface = uci_to_section(e);
-		struct uci_section *radio;
-		const char *name;
-		const char *device;
-		const char *htmode;
+		struct uci_section *radio = NULL;
+		const char *v;
 
 		if (strcmp(iface->type, "wifi-iface") != 0) {
 			continue;
 		}
-		name = uci_lookup_option_string(ctx, iface, "ifname");
-		if (name == NULL || strcmp(name, ifname) != 0) {
+		v = uci_lookup_option_string(ctx, iface, "ifname");
+		if (v == NULL || strcmp(v, ifname) != 0) {
 			continue;
 		}
-		device = uci_lookup_option_string(ctx, iface, "device");
-		if (device == NULL) {
-			break;
+		out->found = 1;
+		v = uci_lookup_option_string(ctx, iface, "encryption");
+		if (v != NULL) {
+			snprintf(out->encryption, sizeof(out->encryption), "%s", v);
 		}
-		radio = uci_lookup_section(ctx, pkg, device);
-		if (radio == NULL) {
-			break;
+		v = uci_lookup_option_string(ctx, iface, "mesh_id");
+		if (v != NULL) {
+			snprintf(out->mesh_id, sizeof(out->mesh_id), "%s", v);
 		}
-		htmode = uci_lookup_option_string(ctx, radio, "htmode");
-		if (htmode != NULL) {
-			snprintf(out, len, "%s", htmode);
-			ret = 0;
+		v = uci_lookup_option_string(ctx, iface, "device");
+		if (v != NULL) {
+			radio = uci_lookup_section(ctx, pkg, v);
 		}
-		break;
+		if (radio != NULL) {
+			v = uci_lookup_option_string(ctx, radio, "htmode");
+			if (v != NULL) {
+				snprintf(out->htmode, sizeof(out->htmode), "%s", v);
+			}
+		}
+		return;
 	}
-	uci_unload(ctx, pkg);
-	uci_free_context(ctx);
-	return ret;
+}
+
+/* "encryption": the uci value (psk2, sae, sae-mixed, ...), "none" when unset, null if not in uci */
+static void json_encryption(struct apmon_json *j, const struct uci_wifi *u)
+{
+	if (!u->found) {
+		apmon_json_null(j, "encryption");
+	} else if (u->encryption[0] == '\0') {
+		apmon_json_string(j, "encryption", "none");
+	} else {
+		apmon_json_string(j, "encryption", u->encryption);
+	}
+}
+
+/* phy name (phy0, or what the board renamed it to) from sysfs, else phy<wiphy index> */
+static void phy_name(const struct apmon_wifi_iface *ifc, char *out, size_t len)
+{
+	char path[96];
+
+	snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211/name", ifc->ifname);
+	if (read_line(path, out, len) == 0 && out[0] != '\0') {
+		return;
+	}
+	snprintf(out, len, "phy%d", ifc->wiphy);
+}
+
+static const int *wiphy_families(const struct apmond_wiphy_caps *caps, int wiphy)
+{
+	int i;
+
+	for (i = 0; i < caps->count; i++) {
+		if (caps->wiphy[i] == wiphy) {
+			return caps->family[i];
+		}
+	}
+	return NULL;
+}
+
+static int is_reported(const struct apmon_wifi_iface *ifc)
+{
+	if (ifc->iftype == NL80211_IFTYPE_AP || ifc->iftype == NL80211_IFTYPE_MESH_POINT) {
+		return 1;
+	}
+	return 0;
+}
+
+static void add_wifi_client(struct apmon_json *j, const struct apmon_wifi_sta *sta, const struct apmon_wifi_iface *ap,
+			    uint64_t now_ms, struct wifi_macs *macs)
+{
+	char mac[18];
+	char bssid[18];
+
+	apmon_mac_format(sta->mac, mac);
+	if (macs->count < MAX_WIFI_MACS) {
+		snprintf(macs->mac[macs->count], 18, "%s", mac);
+		macs->count++;
+	}
+
+	apmon_json_open_object(j, NULL);
+	apmon_json_string(j, "client_mac", mac);
+	apmon_json_string(j, "kind", "wifi");
+	if (ap->have_ssid) {
+		apmon_json_string(j, "ap_ssid", ap->ssid);
+	} else {
+		apmon_json_null(j, "ap_ssid");
+	}
+	apmon_json_string(j, "ap_ifname", ap->ifname);
+	if (ap->have_mac) {
+		apmon_mac_format(ap->mac, bssid);
+		apmon_json_string(j, "ap_bssid", bssid);
+	} else {
+		apmon_json_null(j, "ap_bssid");
+	}
+	json_vlan(j, apmond_port_vlan(ap->ifname, now_ms));
+	json_vxlan(j, ap->ifname, now_ms);
+	json_flag_int(j, "signal_avg_dbm", sta->have, APMON_STA_SIGNAL_AVG, sta->signal_avg);
+	json_flag_int(j, "signal_dbm", sta->have, APMON_STA_SIGNAL, sta->signal);
+	json_flag_int(j, "ack_signal_avg_dbm", sta->have, APMON_STA_ACK_SIGNAL_AVG, sta->ack_signal_avg);
+	json_flag_int(j, "tx_bitrate_kbps", sta->have, APMON_STA_TX_RATE, sta->tx_rate_kbps);
+	json_flag_int(j, "rx_bitrate_kbps", sta->have, APMON_STA_RX_RATE, sta->rx_rate_kbps);
+	json_flag_int(j, "tx_bytes", sta->have, APMON_STA_TX_BYTES, (int64_t)sta->tx_bytes);
+	json_flag_int(j, "rx_bytes", sta->have, APMON_STA_RX_BYTES, (int64_t)sta->rx_bytes);
+	json_flag_int(j, "tx_retries", sta->have, APMON_STA_TX_RETRIES, sta->tx_retries);
+	json_flag_int(j, "connected_s", sta->have, APMON_STA_CONNECTED, sta->connected_s);
+	apmon_json_int(j, "inactive_ms", sta->inactive_ms);
+	apmon_json_int(j, "last_seen", (int64_t)now_ms - sta->inactive_ms);
+	apmon_json_close_object(j);
 }
 
 /*
- * Radio fields of the phy whose first AP is aps[first]. iwinfo answers per interface and not
- * every AP of a phy reports the radio right (on an MT6000 vxradio0 and phy0-ap0 say NOHT, and
- * phy0-ap0 can say channel 0): channel, frequency and txpower come from the first AP of the phy
- * with a channel, htmode from apmon_pick_htmode (the APs, then uci wireless), else null.
+ * Radio fields of the phy of ifs[first]: channel, frequency and txpower from the first
+ * interface of the phy with a frequency; htmode = family + width, the family from the uci
+ * htmode prefix (what the radio is configured for), else the wiphy capabilities for the band,
+ * the width the widest any interface of the phy runs. uci htmode as is if nl80211 has no width.
  */
-static void write_radio_fields(struct apmon_json *j, struct ap_info *aps, int count, int first)
+static void write_radio_fields(struct apmon_json *j, const struct apmon_wifi_iface *ifs, const int *rep, int count,
+			       int first, const char *phy, const char *const *phys, const struct uci_wifi *uw,
+			       const struct apmond_wiphy_caps *caps)
 {
-	const char *htmodes[MAX_APS];
-	char uci_htmode[16] = "";
-	const char *htmode;
-	int src = first;
-	int n = 0;
+	int src = -1;
+	int width = -1;
+	int family = -1;
+	const char *uci_htmode = "";
+	const int *fams;
+	char htmode[16];
 	int k;
 
-	for (k = count - 1; k >= first; k--) {
-		int64_t channel;
-
-		if (strcmp(aps[k].phy, aps[first].phy) != 0) {
+	for (k = first; k < count; k++) {
+		if (!rep[k] || strcmp(phys[k], phy) != 0) {
 			continue;
 		}
-		if (attr_int(find_attr(aps[k].info, "channel"), &channel) == 0 && channel > 0) {
+		if (src < 0 && ifs[k].freq > 0) {
 			src = k;
 		}
-	}
-	for (k = first; k < count; k++) {
-		if (strcmp(aps[k].phy, aps[first].phy) != 0) {
-			continue;
-		}
-		htmodes[n] = attr_string(find_attr(aps[k].info, "htmode"));
-		n++;
-		if (uci_htmode[0] == '\0') {
-			if (uci_radio_htmode(aps[k].ifname, uci_htmode, sizeof(uci_htmode)) != 0) {
-				uci_htmode[0] = '\0';
-			}
+		width = apmon_wider_width(width, ifs[k].width);
+		if (uci_htmode[0] == '\0' && uw[k].htmode[0] != '\0') {
+			uci_htmode = uw[k].htmode;
 		}
 	}
 
-	json_int_attr(j, "channel", find_attr(aps[src].info, "channel"));
-	json_int_attr(j, "frequency_mhz", find_attr(aps[src].info, "frequency"));
-	htmode = apmon_pick_htmode(htmodes, n, uci_htmode);
-	if (htmode != NULL) {
+	family = apmon_htmode_family(uci_htmode);
+	fams = wiphy_families(caps, ifs[first].wiphy);
+	if (family < 0 && src >= 0 && fams != NULL) {
+		int band = apmon_freq_band(ifs[src].freq);
+
+		if (band >= 0 && band < APMON_BANDS) {
+			family = fams[band];
+		}
+	}
+
+	if (src >= 0) {
+		apmon_json_int(j, "channel", apmon_freq_to_channel(ifs[src].freq));
+		apmon_json_int(j, "frequency_mhz", ifs[src].freq);
+	} else {
+		apmon_json_null(j, "channel");
+		apmon_json_null(j, "frequency_mhz");
+	}
+	if (apmon_htmode_string(family, width, htmode, sizeof(htmode)) == 0) {
 		apmon_json_string(j, "htmode", htmode);
+	} else if (uci_htmode[0] != '\0') {
+		apmon_json_string(j, "htmode", uci_htmode);
 	} else {
 		apmon_json_null(j, "htmode");
 	}
-	json_int_attr(j, "txpower_dbm", find_attr(aps[src].info, "txpower"));
+	if (src >= 0 && ifs[src].have_txpower) {
+		apmon_json_int(j, "txpower_dbm", ifs[src].txpower_mbm / 100);
+	} else {
+		apmon_json_null(j, "txpower_dbm");
+	}
 }
 
-/* One "radios" entry per phy, with its AP interfaces under "aps"; Wi-Fi clients go to the clients writer */
+struct wifi_state {
+	struct apmon_wifi_iface ifs[MAX_WIFI_IFACES];
+	struct uci_wifi uw[MAX_WIFI_IFACES];
+	char phys[MAX_WIFI_IFACES][IFNAMSIZ];
+	const char *phyp[MAX_WIFI_IFACES];
+	int rep[MAX_WIFI_IFACES];
+	struct apmond_wiphy_caps caps;
+	struct apmon_wifi_sta stas[MAX_STATIONS];
+};
+
+static void write_iface(struct apmon_json *j, struct wifi_state *w, int k, uint64_t now_ms)
+{
+	const struct apmon_wifi_iface *ifc = &w->ifs[k];
+	char bssid[18];
+
+	apmon_json_open_object(j, NULL);
+	apmon_json_string(j, "ifname", ifc->ifname);
+	if (ifc->iftype == NL80211_IFTYPE_MESH_POINT) {
+		if (w->uw[k].mesh_id[0] != '\0') {
+			apmon_json_string(j, "mesh_id", w->uw[k].mesh_id);
+		} else {
+			apmon_json_null(j, "mesh_id");
+		}
+	} else if (ifc->have_ssid) {
+		apmon_json_string(j, "ssid", ifc->ssid);
+	} else {
+		apmon_json_null(j, "ssid");
+	}
+	if (ifc->have_mac) {
+		apmon_mac_format(ifc->mac, bssid);
+		apmon_json_string(j, "bssid", bssid);
+	} else {
+		apmon_json_null(j, "bssid");
+	}
+	json_encryption(j, &w->uw[k]);
+	json_vlan(j, apmond_port_vlan(ifc->ifname, now_ms));
+	json_vxlan(j, ifc->ifname, now_ms);
+	apmon_json_close_object(j);
+}
+
+/*
+ * One "radios" entry per phy, with its AP interfaces under "aps" and mesh points under "mesh";
+ * stations of the APs go to the clients writer (mesh peers are nodes, not clients).
+ */
 static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *clients, uint64_t now_ms,
 		     struct wifi_macs *macs)
 {
-	struct blob_attr *devices = iwinfo_call(a, "devices", NULL);
-	struct ap_info aps[MAX_APS];
+	struct wifi_state *w = calloc(1, sizeof(*w));
+	struct uci_context *ctx;
+	struct uci_package *pkg = NULL;
 	int count = 0;
-	struct blob_attr *list;
-	struct blob_attr *dev;
-	size_t rem;
 	int i;
 	int k;
 
+	(void)a;
 	apmon_json_open_array(j, "radios");
+	if (w == NULL) {
+		apmon_json_close_array(j);
+		return;
+	}
+	apmond_nl80211_snapshot(w->ifs, MAX_WIFI_IFACES, &count, &w->caps);
 
-	list = find_attr(devices, "devices");
-	if (list != NULL) {
-		blobmsg_for_each_attr(dev, list, rem) {
-			struct blob_attr *info;
-			struct blob_attr *mode;
-
-			if (blobmsg_type(dev) != BLOBMSG_TYPE_STRING || count >= MAX_APS) {
-				continue;
-			}
-			info = iwinfo_call(a, "info", blobmsg_get_string(dev));
-			mode = find_attr(info, "mode");
-			if (mode == NULL || strcmp(blobmsg_get_string(mode), "Master") != 0) {
-				free(info);
-				continue;
-			}
-			aps[count].ifname = blobmsg_get_string(dev);
-			aps[count].info = info;
-			aps[count].phy = info_phy(info);
-			count++;
+	ctx = uci_alloc_context();
+	if (ctx != NULL && (uci_load(ctx, "wireless", &pkg) != UCI_OK)) {
+		pkg = NULL;
+	}
+	for (i = 0; i < count; i++) {
+		w->rep[i] = is_reported(&w->ifs[i]);
+		phy_name(&w->ifs[i], w->phys[i], sizeof(w->phys[i]));
+		w->phyp[i] = w->phys[i];
+		if (w->rep[i]) {
+			uci_wifi_lookup(ctx, pkg, w->ifs[i].ifname, &w->uw[i]);
 		}
+	}
+	if (pkg != NULL) {
+		uci_unload(ctx, pkg);
+	}
+	if (ctx != NULL) {
+		uci_free_context(ctx);
 	}
 
 	for (i = 0; i < count; i++) {
 		int first_of_phy = 1;
 
+		if (!w->rep[i]) {
+			continue;
+		}
 		for (k = 0; k < i; k++) {
-			if (strcmp(aps[k].phy, aps[i].phy) == 0) {
+			if (w->rep[k] && strcmp(w->phys[k], w->phys[i]) == 0) {
 				first_of_phy = 0;
 			}
 		}
@@ -647,54 +634,43 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 		}
 
 		apmon_json_open_object(j, NULL);
-		apmon_json_string(j, "phy", aps[i].phy);
-		write_radio_fields(j, aps, count, i);
+		apmon_json_string(j, "phy", w->phys[i]);
+		write_radio_fields(j, w->ifs, w->rep, count, i, w->phys[i], w->phyp, w->uw, &w->caps);
 		apmon_json_open_array(j, "aps");
-
 		for (k = i; k < count; k++) {
-			if (strcmp(aps[k].phy, aps[i].phy) != 0) {
-				continue;
+			if (w->ifs[k].iftype == NL80211_IFTYPE_AP && strcmp(w->phys[k], w->phys[i]) == 0) {
+				write_iface(j, w, k, now_ms);
 			}
-			apmon_json_open_object(j, NULL);
-			apmon_json_string(j, "ifname", aps[k].ifname);
-			json_string_attr(j, "ssid", find_attr(aps[k].info, "ssid"));
-			json_string_attr(j, "bssid", find_attr(aps[k].info, "bssid"));
-			json_vlan(j, apmond_port_vlan(aps[k].ifname, now_ms));
-			json_vxlan(j, aps[k].ifname, now_ms);
-			apmon_json_close_object(j);
 		}
-
+		apmon_json_close_array(j);
+		apmon_json_open_array(j, "mesh");
+		for (k = i; k < count; k++) {
+			if (w->ifs[k].iftype == NL80211_IFTYPE_MESH_POINT && strcmp(w->phys[k], w->phys[i]) == 0) {
+				write_iface(j, w, k, now_ms);
+			}
+		}
 		apmon_json_close_array(j);
 		apmon_json_close_object(j);
 	}
 
 	for (i = 0; i < count; i++) {
-		struct blob_attr *assoc;
-		struct blob_attr *results;
-		struct blob_attr *sta;
-		size_t srem;
+		int n;
 
+		if (w->ifs[i].iftype != NL80211_IFTYPE_AP) {
+			continue;
+		}
 		if (macs->if_count < 32) {
-			snprintf(macs->ifnames[macs->if_count], IFNAMSIZ, "%s", aps[i].ifname);
+			snprintf(macs->ifnames[macs->if_count], IFNAMSIZ, "%s", w->ifs[i].ifname);
 			macs->if_count++;
 		}
-
-		assoc = iwinfo_call(a, "assoclist", aps[i].ifname);
-		results = find_attr(assoc, "results");
-		if (results != NULL) {
-			blobmsg_for_each_attr(sta, results, srem) {
-				add_wifi_client(clients, sta, aps[i].ifname, aps[i].info, now_ms, macs);
-			}
+		n = apmond_nl80211_stations(w->ifs[i].ifindex, w->stas, MAX_STATIONS);
+		for (k = 0; k < n; k++) {
+			add_wifi_client(clients, &w->stas[k], &w->ifs[i], now_ms, macs);
 		}
-		free(assoc);
-	}
-
-	for (i = 0; i < count; i++) {
-		free(aps[i].info);
 	}
 
 	apmon_json_close_array(j);
-	free(devices);
+	free(w);
 }
 
 /* ---------- wired clients: bridge forwarding database ---------- */
@@ -991,7 +967,7 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 		}
 
 		/* Skip MACs learned over a wireless port (eg an 802.11s mesh backhaul).
-		 * They are remote, Wi-Fi clients come from iwinfo instead */
+		 * They are remote, Wi-Fi clients come from nl80211 instead */
 		if (is_wireless_port(port)) {
 			continue;
 		}

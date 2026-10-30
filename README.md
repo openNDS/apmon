@@ -124,8 +124,9 @@ the init script starts it one of two ways:
 
 `CAP_NET_ADMIN` is needed to add and remove the ULA addresses over netlink; the collector
 port (2468) needs no capability, and `CAP_NET_RAW` is not used. ubus access for user
-apmond is in `/usr/share/acl.d/apmond.json`: publish `apmond`, call `iwinfo`
-devices/info/assoclist and `network.interface.*` status. The postinst reloads ubusd so the
+apmond is in `/usr/share/acl.d/apmond.json`: publish `apmond` and call `network.interface.*`
+status. Wi-Fi state comes straight from the kernel over nl80211 generic netlink (no iwinfo,
+rpcd-mod-iwinfo or libnl; dumps need no capability). The postinst reloads ubusd so the
 ACL applies at once.
 
 `/etc/config/apmond` is root:apmond 0640 (set at every start): the daemon reads it,

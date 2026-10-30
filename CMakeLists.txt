@@ -23,6 +23,7 @@ add_library(apmon STATIC
 	src/lib/pretty.c
 	src/lib/logfile.c
 	src/lib/factory_mac.c
+	src/lib/wifi_parse.c
 )
 target_include_directories(apmon PUBLIC src/lib)
 set_property(TARGET apmon PROPERTY POSITION_INDEPENDENT_CODE ON)
@@ -72,6 +73,7 @@ if(BUILD_DAEMON)
 		src/apmond/collect.c
 		src/apmond/collector.c
 		src/apmond/vlan.c
+		src/apmond/nl80211.c
 		src/apmond/http_client.c
 		src/apmond/log.c
 		src/apmond/ula.c

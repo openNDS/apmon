@@ -894,8 +894,155 @@ static void test_collector_role(void)
 	CHECK(apmon_recheck_due(&cycles, 0) == 0 && cycles == 0, "recheck: 0 = off");
 }
 
+/* ---------- r19 nl80211 parsing ---------- */
+
+#include <linux/netlink.h>
+#include <linux/nl80211.h>
+
+struct nlbuf {
+	unsigned char b[1024];
+	size_t len;
+};
+
+static size_t nl_put(struct nlbuf *n, int type, const void *data, size_t dlen)
+{
+	struct nlattr *a = (struct nlattr *)(n->b + n->len);
+	size_t at = n->len;
+
+	a->nla_type = (uint16_t)type;
+	a->nla_len = (uint16_t)(NLA_HDRLEN + dlen);
+	if (dlen > 0) {
+		memcpy(n->b + n->len + NLA_HDRLEN, data, dlen);
+	}
+	n->len += NLA_ALIGN(a->nla_len);
+	return at;
+}
+
+static void nl_put_u32(struct nlbuf *n, int type, uint32_t v)
+{
+	nl_put(n, type, &v, 4);
+}
+
+/* close a nest opened at 'at' */
+static void nl_end(struct nlbuf *n, size_t at)
+{
+	struct nlattr *a = (struct nlattr *)(n->b + at);
+
+	a->nla_len = (uint16_t)(n->len - at);
+}
+
+static void test_nl80211(void)
+{
+	struct nlbuf n;
+	struct apmon_wifi_iface ifc;
+	struct apmon_wifi_sta sta;
+	uint8_t mac[6] = { 0x94, 0x83, 0xC4, 0x63, 0xC3, 0xF5 };
+	char mode[16];
+	char macs[18];
+	int fam[APMON_BANDS] = { 0 };
+	size_t sinfo;
+	size_t rate;
+	size_t bands;
+	size_t band;
+	size_t it;
+	size_t entry;
+	signed char sig = -52;
+	signed char avg = -55;
+	uint64_t big = 5000000000ULL;
+	uint16_t r16 = 65;
+
+	memset(&n, 0, sizeof(n));
+	nl_put_u32(&n, NL80211_ATTR_IFINDEX, 12);
+	nl_put(&n, NL80211_ATTR_IFNAME, "phy1-ap0", 9);
+	nl_put(&n, NL80211_ATTR_MAC, mac, 6);
+	nl_put(&n, NL80211_ATTR_SSID, "apmon", 5);
+	nl_put_u32(&n, NL80211_ATTR_IFTYPE, NL80211_IFTYPE_AP);
+	nl_put_u32(&n, NL80211_ATTR_WIPHY, 1);
+	nl_put_u32(&n, NL80211_ATTR_WIPHY_FREQ, 5180);
+	nl_put_u32(&n, NL80211_ATTR_CHANNEL_WIDTH, NL80211_CHAN_WIDTH_80);
+	nl_put_u32(&n, NL80211_ATTR_WIPHY_TX_POWER_LEVEL, 2300);
+	CHECK(apmon_nl80211_parse_iface(n.b, n.len, &ifc) == 0, "nl80211: iface parses");
+	CHECK(ifc.ifindex == 12 && strcmp(ifc.ifname, "phy1-ap0") == 0, "nl80211: ifindex and name");
+	CHECK(strcmp(ifc.ssid, "apmon") == 0 && ifc.have_ssid, "nl80211: ssid (not NUL terminated on the wire)");
+	CHECK(ifc.iftype == NL80211_IFTYPE_AP && ifc.wiphy == 1 && ifc.freq == 5180, "nl80211: type, wiphy, freq");
+	CHECK(ifc.width == NL80211_CHAN_WIDTH_80 && ifc.txpower_mbm == 2300, "nl80211: width and txpower");
+	apmon_mac_format(ifc.mac, macs);
+	CHECK(strcmp(macs, "94:83:c4:63:c3:f5") == 0, "nl80211: bssid lower case");
+
+	memset(&n, 0, sizeof(n));
+	nl_put_u32(&n, NL80211_ATTR_WIPHY, 0);
+	CHECK(apmon_nl80211_parse_iface(n.b, n.len, &ifc) == -1, "nl80211: iface without ifindex rejected");
+
+	/* station: 64 bit bytes win, BITRATE32 preferred, 16 bit fallback */
+	memset(&n, 0, sizeof(n));
+	nl_put(&n, NL80211_ATTR_MAC, mac, 6);
+	sinfo = nl_put(&n, NL80211_ATTR_STA_INFO, NULL, 0);
+	nl_put_u32(&n, NL80211_STA_INFO_INACTIVE_TIME, 340);
+	nl_put_u32(&n, NL80211_STA_INFO_CONNECTED_TIME, 7200);
+	nl_put_u32(&n, NL80211_STA_INFO_RX_BYTES, 1);
+	nl_put(&n, NL80211_STA_INFO_RX_BYTES64, &big, 8);
+	nl_put_u32(&n, NL80211_STA_INFO_TX_BYTES, 4242);
+	nl_put_u32(&n, NL80211_STA_INFO_TX_RETRIES, 17);
+	nl_put(&n, NL80211_STA_INFO_SIGNAL, &sig, 1);
+	nl_put(&n, NL80211_STA_INFO_SIGNAL_AVG, &avg, 1);
+	rate = nl_put(&n, NL80211_STA_INFO_TX_BITRATE, NULL, 0);
+	nl_put(&n, NL80211_RATE_INFO_BITRATE, &r16, 2);
+	nl_put_u32(&n, NL80211_RATE_INFO_BITRATE32, 12010);
+	nl_end(&n, rate);
+	rate = nl_put(&n, NL80211_STA_INFO_RX_BITRATE, NULL, 0);
+	nl_put(&n, NL80211_RATE_INFO_BITRATE, &r16, 2);
+	nl_end(&n, rate);
+	nl_end(&n, sinfo);
+	CHECK(apmon_nl80211_parse_station(n.b, n.len, &sta) == 0, "nl80211: station parses");
+	CHECK(sta.inactive_ms == 340 && sta.connected_s == 7200, "nl80211: inactive and connected");
+	CHECK(sta.rx_bytes == big && sta.tx_bytes == 4242, "nl80211: 64 bit bytes, 32 bit fallback");
+	CHECK(sta.tx_retries == 17 && sta.signal == -52 && sta.signal_avg == -55, "nl80211: retries and signed signal");
+	CHECK(!(sta.have & APMON_STA_ACK_SIGNAL_AVG), "nl80211: absent ack signal flagged absent");
+	CHECK(sta.tx_rate_kbps == 1201000 && sta.rx_rate_kbps == 6500, "nl80211: bitrate32 and 16 bit, kbit/s");
+
+	/* wiphy: 2.4 GHz HE, 5 GHz VHT only */
+	memset(&n, 0, sizeof(n));
+	nl_put_u32(&n, NL80211_ATTR_WIPHY, 1);
+	bands = nl_put(&n, NL80211_ATTR_WIPHY_BANDS, NULL, 0);
+	band = nl_put(&n, NL80211_BAND_2GHZ, NULL, 0);
+	nl_put(&n, NL80211_BAND_ATTR_HT_CAPA, &r16, 2);
+	it = nl_put(&n, NL80211_BAND_ATTR_IFTYPE_DATA, NULL, 0);
+	entry = nl_put(&n, 1, NULL, 0);
+	nl_put(&n, NL80211_BAND_IFTYPE_ATTR_HE_CAP_PHY, mac, 6);
+	nl_end(&n, entry);
+	nl_end(&n, it);
+	nl_end(&n, band);
+	band = nl_put(&n, NL80211_BAND_5GHZ, NULL, 0);
+	nl_put(&n, NL80211_BAND_ATTR_HT_CAPA, &r16, 2);
+	nl_put_u32(&n, NL80211_BAND_ATTR_VHT_CAPA, 1);
+	nl_end(&n, band);
+	nl_end(&n, bands);
+	CHECK(apmon_nl80211_parse_wiphy(n.b, n.len, fam) == 1, "nl80211: wiphy index");
+	CHECK(fam[NL80211_BAND_2GHZ] == APMON_FAMILY_HE, "nl80211: 2.4 GHz HE from iftype data");
+	CHECK(fam[NL80211_BAND_5GHZ] == APMON_FAMILY_VHT, "nl80211: 5 GHz VHT");
+
+	CHECK(apmon_freq_to_channel(2412) == 1 && apmon_freq_to_channel(2484) == 14, "freq: 2.4 GHz channels");
+	CHECK(apmon_freq_to_channel(5180) == 36 && apmon_freq_to_channel(5955) == 1, "freq: 5 and 6 GHz channels");
+	CHECK(apmon_freq_band(5180) == NL80211_BAND_5GHZ && apmon_freq_band(6115) == NL80211_BAND_6GHZ, "freq: bands");
+
+	CHECK(apmon_htmode_family("HE40") == APMON_FAMILY_HE && apmon_htmode_family("") == -1, "htmode: uci family");
+	CHECK(apmon_htmode_family("VHT80") == APMON_FAMILY_VHT && apmon_htmode_family("NOHT") == 0, "htmode: VHT, NOHT");
+	CHECK(apmon_htmode_string(APMON_FAMILY_HE, NL80211_CHAN_WIDTH_80, mode, sizeof(mode)) == 0 &&
+	      strcmp(mode, "HE80") == 0, "htmode: MT6000 HE80, not NOHT");
+	CHECK(apmon_htmode_string(APMON_FAMILY_EHT, NL80211_CHAN_WIDTH_320, mode, sizeof(mode)) == 0 &&
+	      strcmp(mode, "EHT320") == 0, "htmode: EHT320");
+	CHECK(apmon_htmode_string(APMON_FAMILY_HE, NL80211_CHAN_WIDTH_20_NOHT, mode, sizeof(mode)) == 0 &&
+	      strcmp(mode, "NOHT") == 0, "htmode: 20_NOHT");
+	CHECK(apmon_htmode_string(-1, NL80211_CHAN_WIDTH_40, mode, sizeof(mode)) == -1, "htmode: unknown family");
+	CHECK(apmon_wider_width(NL80211_CHAN_WIDTH_20_NOHT, NL80211_CHAN_WIDTH_80) == NL80211_CHAN_WIDTH_80,
+	      "width: widest across ifaces");
+	CHECK(apmon_wider_width(NL80211_CHAN_WIDTH_160, -1) == NL80211_CHAN_WIDTH_160, "width: unknown loses");
+	CHECK(strcmp(apmon_iftype_name(NL80211_IFTYPE_MESH_POINT), "mesh") == 0, "iftype: mesh");
+}
+
 int main(void)
 {
+	test_nl80211();
 	test_collector_role();
 	test_pick_htmode();
 	test_ifindex_action();

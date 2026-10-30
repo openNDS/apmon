@@ -630,7 +630,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 		printf("\n");
 	}
 
-	apmon_table_init(&t, 9);
+	apmon_table_init(&t, 10);
 	apmon_table_add(&t, "PHY");
 	apmon_table_add(&t, "CHANNEL");
 	apmon_table_add(&t, "MHZ");
@@ -638,6 +638,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 	apmon_table_add(&t, "AP");
 	apmon_table_add(&t, "SSID");
 	apmon_table_add(&t, "BSSID");
+	apmon_table_add(&t, "ENCRYPTION");
 	apmon_table_add(&t, "VLAN");
 	apmon_table_add(&t, "VXLAN");
 	if (radios != NULL) {
@@ -656,6 +657,7 @@ static void print_node_block(struct blob_attr *n, int *stale)
 				add_field(&t, ap, "ifname");
 				add_field(&t, ap, "ssid");
 				add_field(&t, ap, "bssid");
+				add_field(&t, ap, "encryption");
 				add_field(&t, ap, "vlan");
 				add_vxlan(&t, ap);
 				count++;
