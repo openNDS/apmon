@@ -17,7 +17,7 @@ Status: **2.0.0beta, first testable build.** Protocol: [docs/PROTOCOL.md](docs/P
 
 ## Using it
 
-On every node: same `apmon_seed` and `port` (default 2468) in `/etc/config/apmond`. The node whose default route does not go through `br-lan` becomes the collector; the others send to their default gateway (or to `option collector`).
+On every node: same `apmon_seed` and `port` (default 2468) in `/etc/config/apmond`. The node whose default route does not go through `br-lan` becomes the collector; the others send to the lan's DHCP server or gateway (or to `option collector`).
 
 On the collector:
 
@@ -80,7 +80,7 @@ Every AP and client carries `vlan`: the access VLAN of its bridge port (PVID on 
 
 `apmond debuglevel` prints the level; `apmond debuglevel N` (or `ubus call apmond debuglevel '{"level":N}'`) applies it at once and commits `option debuglevel` to /etc/config/apmond, as 1.x did, so it persists. A change made with `uci set apmond.setup.debuglevel=N; uci commit apmond` is picked up on the next report cycle. Every change is logged at notice level.
 
-As apmond 1.x: messages above `debuglevel` (0 errors, 1 notices (default), 2 info, 3 debug) are dropped and identical consecutive messages are written once. Errors and notices go to syslog and to the log file; info and debug go to the log file only. The log file is `<log_mountpoint>/apmond/apmond_log.log` (default `/tmp/apmond/apmond_log.log`), trimmed to `max_log_entries` lines (500), each line `<date> daemon.<level> apmond[<pid>]: [<n>] <message>`. A `log_mountpoint` that is not mounted disables the log file so it can't fill flash.
+As apmond 1.x: messages above `debuglevel` (0 errors, 1 notices (default), 2 info, 3 debug) are dropped and identical consecutive messages are written once. Errors and notices go to syslog and to the log file; info and debug go to the log file only. The log file is `<log_mountpoint>/apmond/apmond_log.log` (default `/tmp/apmond/apmond_log.log`), trimmed to `max_log_entries` lines (500), each line `<date> daemon.<level> apmond: [<n>] <message>` (r20+: no pid, as in a ujail it would read 1; `apmond status` shows the host pid from procd as `pid`). A `log_mountpoint` that is not mounted disables the log file so it can't fill flash.
 
 ## Adding data from other programs (extension blocks)
 
@@ -125,7 +125,7 @@ the init script starts it one of two ways:
 `CAP_NET_ADMIN` is needed to add and remove the ULA addresses over netlink; the collector
 port (2468) needs no capability, and `CAP_NET_RAW` is not used. ubus access for user
 apmond is in `/usr/share/acl.d/apmond.json`: publish `apmond` and call `network.interface.*`
-status. Wi-Fi state comes straight from the kernel over nl80211 generic netlink (no iwinfo,
+status and `network.wireless` status (AP/mesh encryption and SSID as netifd applied them). Wi-Fi state comes straight from the kernel over nl80211 generic netlink (no iwinfo,
 rpcd-mod-iwinfo or libnl; dumps need no capability). The postinst reloads ubusd so the
 ACL applies at once.
 

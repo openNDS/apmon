@@ -5,7 +5,7 @@
  *   latest after 5 minutes (as syslog), so a quiet daemon still shows it is alive
  * - err and notice go to syslog AND the log file; info and debug go to the log file only
  * - log file <log_mountpoint>/apmond/apmond_log.log (/tmp/apmond/apmond_log.log by default),
- *   lines "<date> daemon.<level> apmond[<pid>]: [<n>] <message>", trimmed to max_log_entries
+ *   lines "<date> daemon.<level> apmond: [<n>] <message>", trimmed to max_log_entries
  * - a log_mountpoint that is not mounted disables the log file (it would fill flash)
  * SPDX-License-Identifier: GPL-2.0-only
  */
@@ -146,7 +146,7 @@ static void write_file(const char *level, const char *msg)
 		fprintf(f, "%s New log file created\n", date);
 		log_lines = 1;
 	}
-	fprintf(f, "%s daemon.%s apmond[%d]: %s\n", date, level, (int)getpid(), msg);
+	fprintf(f, "%s daemon.%s apmond: %s\n", date, level, msg);
 	fclose(f);
 	log_lines++;
 

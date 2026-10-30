@@ -171,7 +171,8 @@ static void choose_collector_address(void)
 		return;
 	}
 
-	if (apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) == 0) {
+	if (apmond_lan_gateway(apmond.ubus, gateway, sizeof(gateway)) == 0 ||
+	    apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) == 0) {
 		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", gateway);
 		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ipv4");
 		return;

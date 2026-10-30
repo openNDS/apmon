@@ -343,6 +343,7 @@ struct uci_wifi {
 	char encryption[32];
 	char mesh_id[64];
 	char htmode[16];
+	char ssid[33];
 };
 
 static void uci_wifi_lookup(struct uci_context *ctx, struct uci_package *pkg, const char *ifname, struct uci_wifi *out)
@@ -369,6 +370,10 @@ static void uci_wifi_lookup(struct uci_context *ctx, struct uci_package *pkg, co
 		v = uci_lookup_option_string(ctx, iface, "encryption");
 		if (v != NULL) {
 			snprintf(out->encryption, sizeof(out->encryption), "%s", v);
+		}
+		v = uci_lookup_option_string(ctx, iface, "ssid");
+		if (v != NULL) {
+			snprintf(out->ssid, sizeof(out->ssid), "%s", v);
 		}
 		v = uci_lookup_option_string(ctx, iface, "mesh_id");
 		if (v != NULL) {
@@ -547,6 +552,150 @@ struct wifi_state {
 	struct apmon_wifi_sta stas[MAX_STATIONS];
 };
 
+static struct blob_attr *blob_child(struct blob_attr *table, const char *name)
+{
+	struct blob_attr *cur;
+	size_t rem;
+
+	if (table == NULL) {
+		return NULL;
+	}
+	blobmsg_for_each_attr(cur, table, rem) {
+		if (strcmp(blobmsg_name(cur), name) == 0) {
+			return cur;
+		}
+	}
+	return NULL;
+}
+
+static void copy_child_string(struct blob_attr *table, const char *name, char *out, size_t len)
+{
+	struct blob_attr *a = blob_child(table, name);
+
+	if (a != NULL && blobmsg_type(a) == BLOBMSG_TYPE_STRING) {
+		snprintf(out, len, "%s", blobmsg_get_string(a));
+	}
+}
+
+/*
+ * netifd's live view (ubus network.wireless status): the config it applied, including
+ * changes mesh11sd and others keep uncommitted in /tmp/.uci, which the jailed daemon cannot
+ * read. Fills the uci_wifi of every interface it knows; the rest keep the /etc/config lookup.
+ */
+static void netifd_wifi_lookup(struct apmond *a, struct wifi_state *w, int count)
+{
+	struct blob_buf b;
+	struct blob_attr *status = NULL;
+	struct blob_attr *radio;
+	size_t rem;
+
+	memset(&b, 0, sizeof(b));
+	blob_buf_init(&b, 0);
+	apmond_ubus_call(a->ubus, "network.wireless", "status", b.head, &status);
+	blob_buf_free(&b);
+	if (status == NULL) {
+		return;
+	}
+	blob_for_each_attr(radio, status, rem) {
+		struct blob_attr *rconf = blob_child(radio, "config");
+		struct blob_attr *ifaces = blob_child(radio, "interfaces");
+		struct blob_attr *ifc;
+		size_t irem;
+		char htmode[16] = "";
+
+		if (ifaces == NULL) {
+			continue;
+		}
+		copy_child_string(rconf, "htmode", htmode, sizeof(htmode));
+		blobmsg_for_each_attr(ifc, ifaces, irem) {
+			struct blob_attr *conf = blob_child(ifc, "config");
+			char ifname[IFNAMSIZ] = "";
+			int i;
+
+			copy_child_string(ifc, "ifname", ifname, sizeof(ifname));
+			if (ifname[0] == '\0') {
+				copy_child_string(conf, "ifname", ifname, sizeof(ifname));
+			}
+			for (i = 0; i < count; i++) {
+				struct uci_wifi *u = &w->uw[i];
+
+				if (strcmp(w->ifs[i].ifname, ifname) != 0) {
+					continue;
+				}
+				memset(u, 0, sizeof(*u));
+				u->found = 1;
+				copy_child_string(conf, "encryption", u->encryption, sizeof(u->encryption));
+				copy_child_string(conf, "mesh_id", u->mesh_id, sizeof(u->mesh_id));
+				copy_child_string(conf, "ssid", u->ssid, sizeof(u->ssid));
+				snprintf(u->htmode, sizeof(u->htmode), "%s", htmode);
+			}
+		}
+	}
+	free(status);
+}
+
+static struct blob_attr *blob_child_top(struct blob_attr *msg, const char *name)
+{
+	struct blob_attr *cur;
+	size_t rem;
+
+	if (msg == NULL) {
+		return NULL;
+	}
+	blob_for_each_attr(cur, msg, rem) {
+		if (strcmp(blobmsg_name(cur), name) == 0) {
+			return cur;
+		}
+	}
+	return NULL;
+}
+
+/*
+ * IPv4 address of the lan's upstream router as netifd knows it (ubus network.interface.lan):
+ * the DHCP server, else the nexthop of its default route. On a mesh peer the kernel default
+ * route can be on another device (mesh11sd's br-tun69); the collector is on the lan.
+ */
+int apmond_lan_gateway(struct ubus_context *ctx, char *out, size_t len)
+{
+	struct blob_buf b;
+	struct blob_attr *status = NULL;
+	struct blob_attr *routes;
+	struct blob_attr *r;
+	size_t rem;
+	int ret = -1;
+
+	out[0] = '\0';
+	memset(&b, 0, sizeof(b));
+	blob_buf_init(&b, 0);
+	apmond_ubus_call(ctx, "network.interface.lan", "status", b.head, &status);
+	blob_buf_free(&b);
+	if (status == NULL) {
+		return -1;
+	}
+	copy_child_string(blob_child_top(status, "data"), "dhcpserver", out, len);
+	if (out[0] != '\0') {
+		ret = 0;
+	}
+	routes = blob_child_top(status, "route");
+	if (ret != 0 && routes != NULL) {
+		blobmsg_for_each_attr(r, routes, rem) {
+			char target[48] = "";
+
+			copy_child_string(r, "target", target, sizeof(target));
+			if (strcmp(target, "0.0.0.0") != 0) {
+				continue;
+			}
+			copy_child_string(r, "nexthop", out, len);
+			if (out[0] != '\0' && strcmp(out, "0.0.0.0") != 0) {
+				ret = 0;
+				break;
+			}
+		}
+	}
+	free(status);
+	return ret;
+}
+
 static void write_iface(struct apmon_json *j, struct wifi_state *w, int k, uint64_t now_ms)
 {
 	const struct apmon_wifi_iface *ifc = &w->ifs[k];
@@ -562,6 +711,8 @@ static void write_iface(struct apmon_json *j, struct wifi_state *w, int k, uint6
 		}
 	} else if (ifc->have_ssid) {
 		apmon_json_string(j, "ssid", ifc->ssid);
+	} else if (w->uw[k].ssid[0] != '\0') {
+		apmon_json_string(j, "ssid", w->uw[k].ssid);
 	} else {
 		apmon_json_null(j, "ssid");
 	}
@@ -591,7 +742,6 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 	int i;
 	int k;
 
-	(void)a;
 	apmon_json_open_array(j, "radios");
 	if (w == NULL) {
 		apmon_json_close_array(j);
@@ -617,6 +767,7 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 	if (ctx != NULL) {
 		uci_free_context(ctx);
 	}
+	netifd_wifi_lookup(a, w, count);
 
 	for (i = 0; i < count; i++) {
 		int first_of_phy = 1;
@@ -994,6 +1145,51 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 	fclose(f);
 }
 
+
+/* ---------- host pid from procd ---------- */
+
+static int host_pid;
+
+/*
+ * Our pid as procd sees it (ubus service list name=apmond: instances.*.pid). In a ujail
+ * with a PID namespace getpid() is 1; this is the pid ps and kill use. Asked from the report
+ * cycle, never inside a ubus handler, and cached until found.
+ */
+static void refresh_host_pid(struct apmond *a)
+{
+	struct blob_buf b;
+	struct blob_attr *list = NULL;
+	struct blob_attr *instances;
+	struct blob_attr *inst;
+	size_t rem;
+
+	if (host_pid > 0) {
+		return;
+	}
+	memset(&b, 0, sizeof(b));
+	blob_buf_init(&b, 0);
+	blobmsg_add_string(&b, "name", "apmond");
+	apmond_ubus_call(a->ubus, "service", "list", b.head, &list);
+	blob_buf_free(&b);
+	instances = blob_child(blob_child_top(list, "apmond"), "instances");
+	if (instances != NULL) {
+		blobmsg_for_each_attr(inst, instances, rem) {
+			struct blob_attr *pid = blob_child(inst, "pid");
+
+			if (pid != NULL && blobmsg_type(pid) == BLOBMSG_TYPE_INT32) {
+				host_pid = (int)blobmsg_get_u32(pid);
+				break;
+			}
+		}
+	}
+	free(list);
+}
+
+int apmond_host_pid(void)
+{
+	return host_pid;
+}
+
 /* ---------- report ---------- */
 
 char *apmond_build_report(struct apmond *a, uint64_t now_ms)
@@ -1005,6 +1201,7 @@ char *apmond_build_report(struct apmond *a, uint64_t now_ms)
 		return NULL;
 	}
 
+	refresh_host_pid(a);
 	apmon_json_init(&j);
 	apmon_json_init(&clients);
 

@@ -794,6 +794,11 @@ static int ubus_status(struct ubus_context *ctx, struct ubus_object *obj, struct
 
 	blob_buf_init(&bb, 0);
 	blobmsg_add_string(&bb, "version", APMOND_VERSION);
+	if (apmond_host_pid() > 0) {
+		blobmsg_add_u32(&bb, "pid", (uint32_t)apmond_host_pid());
+	} else {
+		blobmsg_add_field(&bb, BLOBMSG_TYPE_UNSPEC, "pid", NULL, 0);
+	}
 	apmond_identity_refresh();
 	blobmsg_add_string(&bb, "package_version", APMOND_PACKAGE_VERSION);
 	blobmsg_add_string(&bb, "build_commit", APMOND_BUILD_COMMIT);
@@ -1491,7 +1496,8 @@ static int ubus_debuglevel(struct ubus_context *ctx, struct ubus_object *obj, st
 			persisted = 1;
 		} else {
 			/* jailed as user apmond: /etc/config is read-only here; apmond debuglevel N (root) saves it */
-			LOG_INFO_("debuglevel %d set for this run, not saved to /etc/config/apmond", level);
+			LOG_INFO_("debuglevel %d set; the jailed daemon cannot write /etc/config/apmond, the apmond CLI (root) saves it",
+				  level);
 		}
 	}
 

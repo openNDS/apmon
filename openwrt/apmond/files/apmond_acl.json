@@ -2,6 +2,12 @@
 	"user": "apmond",
 	"publish": [ "apmond" ],
 	"access": {
+		"service": {
+			"methods": [ "list" ]
+		},
+		"network.wireless": {
+			"methods": [ "status" ]
+		},
 		"network.interface.*": {
 			"methods": [ "status" ]
 		}
