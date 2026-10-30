@@ -175,6 +175,12 @@ void apmon_eui64_iid(const uint8_t mac[APMON_ID_LEN], uint8_t out[8]);
  * now = if_nametoindex() now (0 = device missing). SAME: nothing to do; GONE: wait
  * for the device; REBIND: bind again to the new ifindex.
  */
+/*
+ * A radio's htmode: the first AP value that is set and not "NOHT", else the uci wireless
+ * radio htmode if set (which may really be NOHT), else NULL (unknown, never an invented NOHT).
+ */
+const char *apmon_pick_htmode(const char *const *ap_htmodes, int n, const char *uci_htmode);
+
 #define APMON_IFINDEX_SAME 0
 #define APMON_IFINDEX_REBIND 1
 #define APMON_IFINDEX_GONE 2

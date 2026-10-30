@@ -841,8 +841,26 @@ static void test_ifindex_action(void)
 	CHECK(apmon_ifindex_action(0, 0) == APMON_IFINDEX_GONE, "ifindex: still missing, wait");
 }
 
+/* r17 radio htmode: an AP saying NOHT does not hide the radio's real mode */
+static void test_pick_htmode(void)
+{
+	const char *portal[] = { "NOHT", "NOHT" };
+	const char *mixed[] = { "NOHT", NULL, "HE80" };
+	const char *peer[] = { "HE40", "NOHT" };
+	const char *missing[] = { NULL, "" };
+
+	CHECK(strcmp(apmon_pick_htmode(portal, 2, "HE40"), "HE40") == 0, "htmode: all APs NOHT -> uci radio");
+	CHECK(strcmp(apmon_pick_htmode(mixed, 3, "HE40"), "HE80") == 0, "htmode: first AP with a real mode");
+	CHECK(strcmp(apmon_pick_htmode(peer, 2, ""), "HE40") == 0, "htmode: AP value without uci");
+	CHECK(apmon_pick_htmode(portal, 2, "") == NULL, "htmode: NOHT and no uci -> null");
+	CHECK(apmon_pick_htmode(missing, 2, NULL) == NULL, "htmode: nothing -> null");
+	CHECK(strcmp(apmon_pick_htmode(portal, 2, "NOHT"), "NOHT") == 0, "htmode: uci says NOHT -> NOHT");
+	CHECK(apmon_pick_htmode(NULL, 0, NULL) == NULL, "htmode: no APs");
+}
+
 int main(void)
 {
+	test_pick_htmode();
 	test_ifindex_action();
 	test_factory_mac();
 	test_identity();

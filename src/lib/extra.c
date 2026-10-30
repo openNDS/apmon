@@ -333,3 +333,22 @@ void apmon_short_hash(const char *hash, char out[9])
 	}
 	snprintf(out, 9, "%.8s", hash);
 }
+
+const char *apmon_pick_htmode(const char *const *ap_htmodes, int n, const char *uci_htmode)
+{
+	int i;
+
+	for (i = 0; i < n; i++) {
+		if (ap_htmodes[i] == NULL || ap_htmodes[i][0] == '\0') {
+			continue;
+		}
+		if (strcmp(ap_htmodes[i], "NOHT") == 0) {
+			continue;
+		}
+		return ap_htmodes[i];
+	}
+	if (uci_htmode != NULL && uci_htmode[0] != '\0') {
+		return uci_htmode;
+	}
+	return NULL;
+}

@@ -17,6 +17,7 @@
 #include <unistd.h>
 
 #include <libubox/blobmsg_json.h>
+#include <uci.h>
 
 #include "apmond.h"
 
@@ -486,6 +487,116 @@ static const char *info_phy(struct blob_attr *info)
 	return blobmsg_get_string(phy);
 }
 
+/* A string attribute, or NULL */
+static const char *attr_string(struct blob_attr *a)
+{
+	if (a == NULL || blobmsg_type(a) != BLOBMSG_TYPE_STRING) {
+		return NULL;
+	}
+	return blobmsg_get_string(a);
+}
+
+/*
+ * uci wireless: the htmode of the wifi-device that the wifi-iface with option ifname <ifname>
+ * belongs to (mesh11sd and netifd set ifname on every interface they manage); -1 if none.
+ */
+static int uci_radio_htmode(const char *ifname, char *out, size_t len)
+{
+	struct uci_context *ctx = uci_alloc_context();
+	struct uci_package *pkg = NULL;
+	struct uci_element *e;
+	int ret = -1;
+
+	if (ctx == NULL) {
+		return -1;
+	}
+	if (uci_load(ctx, "wireless", &pkg) != UCI_OK || pkg == NULL) {
+		uci_free_context(ctx);
+		return -1;
+	}
+	uci_foreach_element(&pkg->sections, e) {
+		struct uci_section *iface = uci_to_section(e);
+		struct uci_section *radio;
+		const char *name;
+		const char *device;
+		const char *htmode;
+
+		if (strcmp(iface->type, "wifi-iface") != 0) {
+			continue;
+		}
+		name = uci_lookup_option_string(ctx, iface, "ifname");
+		if (name == NULL || strcmp(name, ifname) != 0) {
+			continue;
+		}
+		device = uci_lookup_option_string(ctx, iface, "device");
+		if (device == NULL) {
+			break;
+		}
+		radio = uci_lookup_section(ctx, pkg, device);
+		if (radio == NULL) {
+			break;
+		}
+		htmode = uci_lookup_option_string(ctx, radio, "htmode");
+		if (htmode != NULL) {
+			snprintf(out, len, "%s", htmode);
+			ret = 0;
+		}
+		break;
+	}
+	uci_unload(ctx, pkg);
+	uci_free_context(ctx);
+	return ret;
+}
+
+/*
+ * Radio fields of the phy whose first AP is aps[first]. iwinfo answers per interface and not
+ * every AP of a phy reports the radio right (on an MT6000 vxradio0 and phy0-ap0 say NOHT, and
+ * phy0-ap0 can say channel 0): channel, frequency and txpower come from the first AP of the phy
+ * with a channel, htmode from apmon_pick_htmode (the APs, then uci wireless), else null.
+ */
+static void write_radio_fields(struct apmon_json *j, struct ap_info *aps, int count, int first)
+{
+	const char *htmodes[MAX_APS];
+	char uci_htmode[16] = "";
+	const char *htmode;
+	int src = first;
+	int n = 0;
+	int k;
+
+	for (k = count - 1; k >= first; k--) {
+		int64_t channel;
+
+		if (strcmp(aps[k].phy, aps[first].phy) != 0) {
+			continue;
+		}
+		if (attr_int(find_attr(aps[k].info, "channel"), &channel) == 0 && channel > 0) {
+			src = k;
+		}
+	}
+	for (k = first; k < count; k++) {
+		if (strcmp(aps[k].phy, aps[first].phy) != 0) {
+			continue;
+		}
+		htmodes[n] = attr_string(find_attr(aps[k].info, "htmode"));
+		n++;
+		if (uci_htmode[0] == '\0') {
+			if (uci_radio_htmode(aps[k].ifname, uci_htmode, sizeof(uci_htmode)) != 0) {
+				uci_htmode[0] = '\0';
+			}
+		}
+	}
+
+	json_int_attr(j, "channel", find_attr(aps[src].info, "channel"));
+	json_int_attr(j, "frequency_mhz", find_attr(aps[src].info, "frequency"));
+	htmode = apmon_pick_htmode(htmodes, n, uci_htmode);
+	if (htmode != NULL) {
+		apmon_json_string(j, "htmode", htmode);
+	} else {
+		apmon_json_null(j, "htmode");
+	}
+	json_int_attr(j, "txpower_dbm", find_attr(aps[src].info, "txpower"));
+}
+
 /* One "radios" entry per phy, with its AP interfaces under "aps"; Wi-Fi clients go to the clients writer */
 static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *clients, uint64_t now_ms,
 		     struct wifi_macs *macs)
@@ -537,10 +648,7 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 
 		apmon_json_open_object(j, NULL);
 		apmon_json_string(j, "phy", aps[i].phy);
-		json_int_attr(j, "channel", find_attr(aps[i].info, "channel"));
-		json_int_attr(j, "frequency_mhz", find_attr(aps[i].info, "frequency"));
-		json_string_attr(j, "htmode", find_attr(aps[i].info, "htmode"));
-		json_int_attr(j, "txpower_dbm", find_attr(aps[i].info, "txpower"));
+		write_radio_fields(j, aps, count, i);
 		apmon_json_open_array(j, "aps");
 
 		for (k = i; k < count; k++) {
