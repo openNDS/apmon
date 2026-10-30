@@ -62,6 +62,10 @@ static struct blob_buf bb;
 static struct blob_buf ev;
 static const struct apmon_keys *reply_keys;
 static int listen_fd = -1;
+/* ifindex of the netdev the listener is bound to; a recreated device gets a new one */
+static int listen_ifindex;
+/* the listener is down after a failed re-bind: try again next cycle */
+static int rebind_pending;
 
 static uint64_t age_ms(uint64_t now, uint64_t then);
 static const char *node_state(struct node *n, uint64_t now);
@@ -608,26 +612,21 @@ static int open_listener(void)
 
 int apmond_collector_running(void)
 {
+	if (rebind_pending) {
+		return 1;
+	}
 	return mhd != NULL;
 }
 
-int apmond_collector_start(void)
+/* Open the listening socket and start libmicrohttpd on it; the replay cache is not touched */
+static int start_listener(void)
 {
 	const union MHD_DaemonInfo *info;
-	size_t replay_size = 4096;
 
-	if (mhd != NULL) {
-		return 0;
-	}
-
-	if (apmon_replay_init(&replay, replay_size, (uint64_t)apmond.cfg.max_age * 1000) != 0) {
-		return -1;
-	}
-
+	listen_ifindex = (int)if_nametoindex(apmond.cfg.netdev);
 	listen_fd = open_listener();
 	if (listen_fd < 0) {
 		LOG_ERR_("could not listen on port %d on %s", apmond.cfg.port, apmond.cfg.netdev);
-		apmon_replay_free(&replay);
 		return -1;
 	}
 
@@ -642,7 +641,6 @@ int apmond_collector_start(void)
 		LOG_ERR_("could not start the listener on port %d", apmond.cfg.port);
 		close(listen_fd);
 		listen_fd = -1;
-		apmon_replay_free(&replay);
 		return -1;
 	}
 
@@ -651,6 +649,8 @@ int apmond_collector_start(void)
 		LOG_ERR_("libmicrohttpd has no epoll support");
 		MHD_stop_daemon(mhd);
 		mhd = NULL;
+		close(listen_fd);
+		listen_fd = -1;
 		return -1;
 	}
 
@@ -660,30 +660,92 @@ int apmond_collector_start(void)
 	mhd_timer.cb = mhd_timer_cb;
 	mhd_schedule();
 
+	return 0;
+}
+
+static void stop_listener(void)
+{
+	uloop_fd_delete(&mhd_fd);
+	uloop_timeout_cancel(&mhd_timer);
+	/* MHD_stop_daemon closes the listening socket too */
+	MHD_stop_daemon(mhd);
+	mhd = NULL;
+	listen_fd = -1;
+}
+
+int apmond_collector_start(void)
+{
+	size_t replay_size = 4096;
+
+	if (mhd != NULL) {
+		return 0;
+	}
+
+	if (apmon_replay_init(&replay, replay_size, (uint64_t)apmond.cfg.max_age * 1000) != 0) {
+		return -1;
+	}
+
+
+	if (start_listener() != 0) {
+		apmon_replay_free(&replay);
+		return -1;
+	}
+
 	LOG_NOTICE_("collector listening on port %d (%s only)", apmond.cfg.port, apmond.cfg.netdev);
 	return 0;
 }
 
 void apmond_collector_stop(void)
 {
+	if (rebind_pending) {
+		rebind_pending = 0;
+		apmon_replay_free(&replay);
+		return;
+	}
 	if (mhd == NULL) {
 		return;
 	}
-	uloop_fd_delete(&mhd_fd);
-	uloop_timeout_cancel(&mhd_timer);
-	MHD_stop_daemon(mhd);
-	mhd = NULL;
-	if (listen_fd >= 0) {
-		close(listen_fd);
-		listen_fd = -1;
-	}
+	stop_listener();
 	apmon_replay_free(&replay);
 	LOG_NOTICE_("collector listener stopped");
 }
 
 /* Every report interval on the collector: lost-node events and stale client pruning */
+/*
+ * SO_BINDTODEVICE holds the ifindex, not the name: when mesh11sd or netifd deletes and
+ * recreates the device (same name, new ifindex) the socket gets nothing more.
+ * Checked every cycle; on a change the listener is bound again (replay cache kept).
+ */
+void apmond_collector_check_netdev(void)
+{
+	int now;
+
+	if (mhd == NULL && !rebind_pending) {
+		return;
+	}
+	now = (int)if_nametoindex(apmond.cfg.netdev);
+	if (apmon_ifindex_action(listen_ifindex, now) != APMON_IFINDEX_REBIND) {
+		return;
+	}
+	if (rebind_pending) {
+		LOG_NOTICE_("collector: %s is back (ifindex %d), binding the listener again", apmond.cfg.netdev, now);
+	} else {
+		LOG_NOTICE_("collector: %s was recreated (ifindex %d -> %d), listener re-bound", apmond.cfg.netdev,
+			    listen_ifindex, now);
+		stop_listener();
+	}
+	if (start_listener() != 0) {
+		rebind_pending = 1;
+		listen_ifindex = 0;
+		LOG_ERR_("collector: could not re-bind the listener on %s, retrying next cycle", apmond.cfg.netdev);
+		return;
+	}
+	rebind_pending = 0;
+}
+
 void apmond_collector_housekeeping(void)
 {
+	apmond_collector_check_netdev();
 	struct node *n;
 	uint64_t now = apmon_now_ms();
 

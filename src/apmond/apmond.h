@@ -145,6 +145,7 @@ int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const
 void apmond_ubus_init(void);
 void apmond_collector_stop(void);
 void apmond_collector_housekeeping(void);
+void apmond_collector_check_netdev(void);
 
 /* http_client.c */
 int apmond_http_post(const char *host, int port, const char *path, const uint8_t *body, size_t len,

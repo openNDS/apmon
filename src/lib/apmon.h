@@ -170,6 +170,16 @@ void apmon_short_hash(const char *hash, char out[9]);
 int apmon_ula_prefix(const char *passphrase, uint8_t out[8]);
 void apmon_eui64_iid(const uint8_t mac[APMON_ID_LEN], uint8_t out[8]);
 
+/*
+ * The listener's device after a cycle: bound = ifindex it was bound to (0 = not bound),
+ * now = if_nametoindex() now (0 = device missing). SAME: nothing to do; GONE: wait
+ * for the device; REBIND: bind again to the new ifindex.
+ */
+#define APMON_IFINDEX_SAME 0
+#define APMON_IFINDEX_REBIND 1
+#define APMON_IFINDEX_GONE 2
+int apmon_ifindex_action(int bound, int now);
+
 /* factory (label) MAC, the node id, in apmond 1.x get_factory_mac order; root "" = this system */
 int apmon_factory_mac(const char *root, const char *wan_device, const char *fallback_device,
 		      uint8_t out[APMON_ID_LEN], char *source, size_t source_len);

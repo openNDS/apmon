@@ -831,8 +831,19 @@ static void test_factory_mac(void)
 	}
 }
 
+/* r16 collector listener: re-bind when the device is recreated */
+static void test_ifindex_action(void)
+{
+	CHECK(apmon_ifindex_action(75, 75) == APMON_IFINDEX_SAME, "ifindex: same device, keep the listener");
+	CHECK(apmon_ifindex_action(17, 75) == APMON_IFINDEX_REBIND, "ifindex: recreated device, re-bind");
+	CHECK(apmon_ifindex_action(17, 0) == APMON_IFINDEX_GONE, "ifindex: device missing, wait");
+	CHECK(apmon_ifindex_action(0, 75) == APMON_IFINDEX_REBIND, "ifindex: failed re-bind, retry when back");
+	CHECK(apmon_ifindex_action(0, 0) == APMON_IFINDEX_GONE, "ifindex: still missing, wait");
+}
+
 int main(void)
 {
+	test_ifindex_action();
 	test_factory_mac();
 	test_identity();
 	test_logfile();

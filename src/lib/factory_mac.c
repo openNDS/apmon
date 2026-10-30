@@ -1,5 +1,6 @@
 /*
  * Factory (label) MAC address: the node id, as apmond 1.x get_factory_mac and mesh11sd.
+ * Also apmon_ifindex_action: when the collector re-binds its listener.
  * No OpenWrt libraries, so it is unit tested on the host against a fake root tree.
  *
  * Order (1.x get_factory_mac, then the 1.x get_device_mac fallback):
@@ -244,4 +245,15 @@ int apmon_factory_mac(const char *root, const char *wan_device, const char *fall
 	}
 	snprintf(source, source_len, "none");
 	return -1;
+}
+
+int apmon_ifindex_action(int bound, int now)
+{
+	if (now <= 0) {
+		return APMON_IFINDEX_GONE;
+	}
+	if (now == bound) {
+		return APMON_IFINDEX_SAME;
+	}
+	return APMON_IFINDEX_REBIND;
 }
