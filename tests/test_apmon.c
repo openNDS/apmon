@@ -708,8 +708,132 @@ static void test_identity(void)
 	unlink(path);
 }
 
+/* r15 node id: factory MAC in 1.x get_factory_mac order, from a fake root tree */
+static void put(const char *root, const char *rel, const void *data, size_t len)
+{
+	char path[512];
+	char cmd[600];
+	FILE *f;
+
+	snprintf(path, sizeof(path), "%s/%s", root, rel);
+	snprintf(cmd, sizeof(cmd), "mkdir -p \"$(dirname '%s')\"", path);
+	if (system(cmd) != 0) {
+		return;
+	}
+	f = fopen(path, "wb");
+	fwrite(data, 1, len, f);
+	fclose(f);
+}
+
+static void put_if(const char *root, const char *dev, const char *mac, int ifindex, int type)
+{
+	char rel[128];
+	char text[32];
+
+	snprintf(rel, sizeof(rel), "sys/class/net/%s/address", dev);
+	put(root, rel, mac, strlen(mac));
+	snprintf(rel, sizeof(rel), "sys/class/net/%s/ifindex", dev);
+	snprintf(text, sizeof(text), "%d\n", ifindex);
+	put(root, rel, text, strlen(text));
+	snprintf(rel, sizeof(rel), "sys/class/net/%s/type", dev);
+	snprintf(text, sizeof(text), "%d\n", type);
+	put(root, rel, text, strlen(text));
+}
+
+static int id_is(const char *root, const char *wan, const char *want, const char *want_src)
+{
+	uint8_t id[APMON_ID_LEN];
+	char mac[18];
+	char src[96];
+
+	if (apmon_factory_mac(root, wan, "br-lan", id, src, sizeof(src)) != 0) {
+		return want == NULL;
+	}
+	apmon_mac_format(id, mac);
+	if (want == NULL) {
+		return 0;
+	}
+	if (strcmp(mac, want) != 0) {
+		printf("  got %s from %s\n", mac, src);
+		return 0;
+	}
+	return strstr(src, want_src) != NULL;
+}
+
+static void test_factory_mac(void)
+{
+	char root[] = "/tmp/apmon-test-root.XXXXXX";
+	char cmd[128];
+	const uint8_t dtmac[6] = { 0x94, 0x83, 0xc4, 0xa2, 0x8e, 0xc9 };
+	const uint8_t zero[6] = { 0 };
+	const char *board = "{\n\t\"model\": { \"id\": \"glinet,gl-mt6000\" },\n\t\"system\": {\n\t\t\"label_macaddr\": \"94:83:c4:52:68:73\"\n\t}\n}\n";
+	const char *dtpath = "/soc/ethernet@15100000/mac@1";
+
+	if (mkdtemp(root) == NULL) {
+		CHECK(0, "factory mac: temp dir");
+		return;
+	}
+	CHECK(id_is(root, "", NULL, NULL), "factory mac: nothing at all -> error");
+
+	/* 5. only br-lan (eg x86 with no ether type): device MAC */
+	put_if(root, "br-lan", "96:83:c4:a3:8e:c9\n", 9, 1);
+	CHECK(id_is(root, "", "96:83:c4:a3:8e:c9", "first ethernet interface br-lan"),
+	      "factory mac: br-lan is the only ether interface");
+	put(root, "sys/class/net/br-lan/type", "772\n", 4);
+	CHECK(id_is(root, "", "96:83:c4:a3:8e:c9", "device br-lan"), "factory mac: last resort option device");
+
+	/* 4. first ether interface by ifindex, skipping non-ether and zero MACs */
+	put_if(root, "zz0", "00:00:00:00:00:00\n", 2, 1);
+	put_if(root, "wlan9", "02:00:00:00:00:09\n", 3, 801);
+	put_if(root, "end5", "94:83:c4:00:00:05\n", 5, 1);
+	put_if(root, "end4", "94:83:c4:00:00:04\n", 4, 1);
+	CHECK(id_is(root, "", "94:83:c4:00:00:04", "first ethernet interface end4"),
+	      "factory mac: lowest ifindex ether, zero MAC skipped");
+
+	/* 3. eth1 eth0 lan0 lan1, in that order */
+	put_if(root, "lan1", "94:83:c4:00:01:01\n", 20, 1);
+	CHECK(id_is(root, "", "94:83:c4:00:01:01", "fallback interface lan1"), "factory mac: lan1");
+	put_if(root, "eth0", "94:83:c4:a2:8e:cb\n", 21, 1);
+	CHECK(id_is(root, "", "94:83:c4:a2:8e:cb", "fallback interface eth0"), "factory mac: eth0 before lan1");
+	put_if(root, "eth1", "94:83:c4:a2:8e:ca\n", 22, 1);
+	CHECK(id_is(root, "", "94:83:c4:a2:8e:ca", "fallback interface eth1"), "factory mac: eth1 before eth0");
+
+	/* 2. network.wan.device; missing wan device falls through */
+	put_if(root, "wan", "94:83:c4:a2:8e:c8\n", 23, 1);
+	CHECK(id_is(root, "wan", "94:83:c4:a2:8e:c8", "network.wan.device wan"), "factory mac: wan device first");
+	CHECK(id_is(root, "nosuch", "94:83:c4:a2:8e:ca", "fallback interface eth1"), "factory mac: missing wan device");
+	CHECK(id_is(root, "../x", "94:83:c4:a2:8e:ca", "fallback interface eth1"), "factory mac: no path in wan device");
+
+	/* 1b. board.json label_macaddr */
+	put(root, "etc/board.json", board, strlen(board));
+	CHECK(id_is(root, "wan", "94:83:c4:52:68:73", "board.json"), "factory mac: board.json label_macaddr");
+
+	/* 1a. device tree: label-mac-device, local-mac-address, then mac-address wins; zero ignored */
+	put(root, "proc/device-tree/aliases/label-mac-device", dtpath, strlen(dtpath) + 1);
+	CHECK(id_is(root, "wan", "94:83:c4:52:68:73", "board.json"), "factory mac: DT node without a MAC");
+	snprintf(cmd, sizeof(cmd), "proc/device-tree%s/mac-address", dtpath);
+	put(root, cmd, zero, 6);
+	CHECK(id_is(root, "wan", "94:83:c4:52:68:73", "board.json"), "factory mac: DT zero MAC ignored");
+	snprintf(cmd, sizeof(cmd), "proc/device-tree%s/local-mac-address", dtpath);
+	put(root, cmd, dtmac, 6);
+	CHECK(id_is(root, "wan", "94:83:c4:a2:8e:c9", "device tree"), "factory mac: DT local-mac-address");
+	snprintf(cmd, sizeof(cmd), "proc/device-tree%s/mac-address", dtpath);
+	put(root, cmd, "\x94\x83\xc4\x2e\xf9\xd1", 6);
+	CHECK(id_is(root, "wan", "94:83:c4:2e:f9:d1", "device tree"), "factory mac: DT mac-address first");
+
+	/* br-lan MAC changed (mesh11sd): id unchanged */
+	put(root, "sys/class/net/br-lan/address", "96:83:c4:ff:ff:ff\n", 18);
+	CHECK(id_is(root, "wan", "94:83:c4:2e:f9:d1", "device tree"), "factory mac: br-lan MAC change does not matter");
+
+	snprintf(cmd, sizeof(cmd), "rm -rf '%s'", root);
+	if (system(cmd) != 0) {
+		CHECK(0, "factory mac: clean up");
+	}
+}
+
 int main(void)
 {
+	test_factory_mac();
 	test_identity();
 	test_logfile();
 	test_log_follow();

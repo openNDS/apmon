@@ -59,6 +59,10 @@ start_service() {
 			procd_add_jail_mount /usr/sbin
 			# wired speed fallback: popen("swconfig ...") needs a shell
 			procd_add_jail_mount /bin/sh /sbin/swconfig
+			# node id: the factory MAC from board.json label_macaddr (device tree is under /sys)
+			if [ -f /etc/board.json ]; then
+				procd_add_jail_mount /etc/board.json
+			fi
 			if [ -d /overlay ]; then
 				procd_add_jail_mount /overlay
 			fi

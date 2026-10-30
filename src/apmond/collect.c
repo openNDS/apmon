@@ -46,18 +46,6 @@ static int read_line(const char *path, char *out, size_t out_len)
 	return 0;
 }
 
-int apmond_read_mac(const char *ifname, uint8_t id[APMON_ID_LEN])
-{
-	char path[128];
-	char line[32];
-
-	snprintf(path, sizeof(path), "/sys/class/net/%s/address", ifname);
-	if (read_line(path, line, sizeof(line)) != 0) {
-		return -1;
-	}
-	return apmon_mac_parse(line, id);
-}
-
 /* Default IPv4 route from /proc/net/route: outgoing interface and gateway */
 int apmond_default_route(char *ifname, size_t ifname_len, char *gateway, size_t gw_len)
 {

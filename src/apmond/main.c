@@ -13,6 +13,8 @@
 #include <stdio.h>
 #include <string.h>
 
+#include <uci.h>
+
 #include "apmond.h"
 
 struct apmond apmond;
@@ -76,6 +78,44 @@ static void resolve_netdev(void)
 	LOG_NOTICE_("interface [ %s ] is on network device [ %s ]", apmond.cfg.interface, apmond.cfg.netdev);
 }
 
+/* uci network.wan.device, as 1.x "uci -q get network.wan.device" */
+static void wan_device(char *out, size_t len)
+{
+	struct uci_context *ctx = uci_alloc_context();
+	struct uci_ptr ptr;
+	char spec[] = "network.wan.device";
+
+	out[0] = '\0';
+	if (ctx == NULL) {
+		return;
+	}
+	if (uci_lookup_ptr(ctx, &ptr, spec, true) == UCI_OK) {
+		if ((ptr.flags & UCI_LOOKUP_COMPLETE) && ptr.o != NULL && ptr.o->type == UCI_TYPE_STRING) {
+			snprintf(out, len, "%s", ptr.o->v.string);
+		}
+	}
+	uci_free_context(ctx);
+}
+
+/*
+ * Node id = factory (label) MAC, as apmond 1.x and mesh11sd (which identifies its peers by it).
+ * Not the MAC of br-lan: mesh11sd rewrites that. Falls back to option device.
+ */
+static int read_node_id(void)
+{
+	char wan[64];
+	char source[96];
+
+	wan_device(wan, sizeof(wan));
+	if (apmon_factory_mac("", wan, apmond.cfg.device, apmond.id, source, sizeof(source)) != 0) {
+		LOG_ERR_("cannot determine the factory MAC address (no label MAC, no %s)", apmond.cfg.device);
+		return -1;
+	}
+	apmon_mac_format(apmond.id, apmond.id_str);
+	LOG_NOTICE_("node id %s (factory MAC from %s)", apmond.id_str, source);
+	return 0;
+}
+
 static int run_daemon(const char *confdir)
 {
 	uint64_t start;
@@ -94,11 +134,9 @@ static int run_daemon(const char *confdir)
 
 	apmond_log_init();
 
-	if (apmond_read_mac(apmond.cfg.device, apmond.id) != 0) {
-		LOG_ERR_("cannot read the MAC address of device %s", apmond.cfg.device);
+	if (read_node_id() != 0) {
 		return 1;
 	}
-	apmon_mac_format(apmond.id, apmond.id_str);
 
 	start = apmon_monotonic_ms();
 	apmond.start_mono_ms = start;

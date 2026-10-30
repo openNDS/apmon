@@ -169,6 +169,10 @@ int apmon_restart_needed(const char *running_sha256, const char *installed_sha25
 void apmon_short_hash(const char *hash, char out[9]);
 int apmon_ula_prefix(const char *passphrase, uint8_t out[8]);
 void apmon_eui64_iid(const uint8_t mac[APMON_ID_LEN], uint8_t out[8]);
+
+/* factory (label) MAC, the node id, in apmond 1.x get_factory_mac order; root "" = this system */
+int apmon_factory_mac(const char *root, const char *wan_device, const char *fallback_device,
+		      uint8_t out[APMON_ID_LEN], char *source, size_t source_len);
 int apmon_block_name_valid(const char *name);
 void apmon_format_age(int64_t seconds, char *out, size_t out_len);
 /* Node display order (1.x show_ap_data): the collector first, then hostname, then id */
