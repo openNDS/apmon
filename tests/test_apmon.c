@@ -858,8 +858,37 @@ static void test_pick_htmode(void)
 	CHECK(apmon_pick_htmode(NULL, 0, NULL) == NULL, "htmode: no APs");
 }
 
+/* r18 collector role: WAN upstream only, periodic DAD re-check */
+static void test_collector_role(void)
+{
+	int cycles = 0;
+	int i;
+	int due = 0;
+
+	CHECK(apmon_collector_candidate("auto", 1, 0) == 1, "role: wan default route -> candidate");
+	CHECK(apmon_collector_candidate("auto", 0, 1) == 1, "role: wan6 default route -> candidate");
+	CHECK(apmon_collector_candidate("auto", 0, 0) == 0, "role: no wan (vtun default only) -> sender");
+	CHECK(apmon_collector_candidate("collector", 0, 0) == 1, "role: forced collector");
+	CHECK(apmon_collector_candidate("sender", 1, 1) == 0, "role: forced sender");
+	CHECK(apmon_route_is_default("0.0.0.0", 0) == 1, "route: 0.0.0.0/0");
+	CHECK(apmon_route_is_default("::", 0) == 1, "route: ::/0");
+	CHECK(apmon_route_is_default("0.0.0.0", 24) == 0, "route: not /0");
+	CHECK(apmon_route_is_default("192.168.4.0", 0) == 0, "route: other target");
+	CHECK(apmon_route_is_default(NULL, 0) == 0, "route: no target");
+	for (i = 1; i <= 25; i++) {
+		if (apmon_recheck_due(&cycles, 10)) {
+			due++;
+			CHECK(i % 10 == 0, "recheck: due on every 10th cycle");
+		}
+	}
+	CHECK(due == 2, "recheck: twice in 25 cycles");
+	cycles = 5;
+	CHECK(apmon_recheck_due(&cycles, 0) == 0 && cycles == 0, "recheck: 0 = off");
+}
+
 int main(void)
 {
+	test_collector_role();
 	test_pick_htmode();
 	test_ifindex_action();
 	test_factory_mac();

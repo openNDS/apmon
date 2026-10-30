@@ -253,6 +253,8 @@ static void set_reason(const char *fmt, const char *arg)
 	}
 }
 
+static int recheck_cycles;
+
 static int drop_router(const char *fmt)
 {
 	del_address(&router_addr);
@@ -261,6 +263,35 @@ static int drop_router(const char *fmt)
 	backed_off = 1;
 	set_reason(fmt, apmond.router_ula);
 	return 0;
+}
+
+/*
+ * Two collectors can both hold ::1: claims at the same moment, or a node that took over while
+ * the real collector was away and kept it when it came back (DAD only runs when an address is
+ * added). So the holder deletes and adds ::1 again every collector_recheck cycles: if another
+ * node holds it, DAD fails here and this node backs off. Returns 1 if this node still holds it.
+ */
+static int dad_recheck(void)
+{
+	int flags;
+	int i;
+
+	del_address(&router_addr);
+	if (add_address(&router_addr) != 0) {
+		return 0;
+	}
+	for (i = 0; i < 3; i++) {
+		flags = addr_flags(&router_addr);
+		if (flags < 0 || (flags & IFA_TENTATIVE) == 0 || (flags & IFA_DADFAILED) != 0) {
+			break;
+		}
+		sleep(1);
+	}
+	flags = addr_flags(&router_addr);
+	if (flags < 0 || (flags & IFA_DADFAILED) != 0) {
+		return 0;
+	}
+	return 1;
 }
 
 /*
@@ -295,6 +326,11 @@ int apmond_ula_tick(int candidate)
 	if (flags >= 0) {
 		if (flags & IFA_DADFAILED) {
 			return drop_router("DAD failed on %s after claiming - another collector holds it");
+		}
+		if (apmon_recheck_due(&recheck_cycles, apmond.cfg.collector_recheck)) {
+			if (!dad_recheck()) {
+				return drop_router("DAD re-check on %s failed - another collector holds it");
+			}
 		}
 		misses = 0;
 		backed_off = 0;

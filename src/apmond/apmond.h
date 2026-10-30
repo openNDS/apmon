@@ -47,6 +47,7 @@ struct apmond_config {
 	int prev_epoch_grace;
 	int router_takeover_misses;
 	int claim_delay_max;
+	int collector_recheck;
 };
 
 enum apmond_role {

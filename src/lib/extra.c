@@ -352,3 +352,45 @@ const char *apmon_pick_htmode(const char *const *ap_htmodes, int n, const char *
 	}
 	return NULL;
 }
+
+int apmon_collector_candidate(const char *role, int wan_default, int wan6_default)
+{
+	if (role != NULL && strcmp(role, "collector") == 0) {
+		return 1;
+	}
+	if (role != NULL && strcmp(role, "sender") == 0) {
+		return 0;
+	}
+	if (wan_default || wan6_default) {
+		return 1;
+	}
+	return 0;
+}
+
+int apmon_route_is_default(const char *target, int mask)
+{
+	if (target == NULL || mask != 0) {
+		return 0;
+	}
+	if (strcmp(target, "0.0.0.0") == 0) {
+		return 1;
+	}
+	if (strcmp(target, "::") == 0) {
+		return 1;
+	}
+	return 0;
+}
+
+int apmon_recheck_due(int *cycles, int every)
+{
+	if (every <= 0) {
+		*cycles = 0;
+		return 0;
+	}
+	(*cycles)++;
+	if (*cycles < every) {
+		return 0;
+	}
+	*cycles = 0;
+	return 1;
+}

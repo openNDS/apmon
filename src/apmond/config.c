@@ -97,6 +97,7 @@ int apmond_config_load(struct apmond_config *cfg, const char *confdir)
 	cfg->prev_epoch_grace = get_int(ctx, s, "prev_epoch_grace", 0, 0, 30 * 86400);
 	cfg->router_takeover_misses = get_int(ctx, s, "router_takeover_misses", 3, 1, 100);
 	cfg->claim_delay_max = get_int(ctx, s, "claim_delay_max", 10, 0, 60);
+	cfg->collector_recheck = get_int(ctx, s, "collector_recheck", 10, 0, 1000);
 
 	uci_free_context(ctx);
 	return 0;

@@ -20,28 +20,70 @@ uint64_t apmond_sender_time(void)
 	return (uint64_t)((int64_t)apmon_monotonic_ms() + apmond.clock_offset_ms);
 }
 
+/* netifd interface <name> is up and has a default route */
+static int interface_has_default(const char *name)
+{
+	char object[64];
+	struct blob_attr *out;
+	struct blob_attr *cur;
+	int up = 0;
+	int found = 0;
+	size_t rem;
+
+	snprintf(object, sizeof(object), "network.interface.%s", name);
+	if (apmond_ubus_call(apmond.ubus, object, "status", NULL, &out) != 0) {
+		return 0;
+	}
+	blob_for_each_attr(cur, out, rem) {
+		struct blob_attr *route;
+		size_t rrem;
+
+		if (strcmp(blobmsg_name(cur), "up") == 0 && blobmsg_type(cur) == BLOBMSG_TYPE_BOOL) {
+			up = blobmsg_get_bool(cur);
+			continue;
+		}
+		if (strcmp(blobmsg_name(cur), "route") != 0 || blobmsg_type(cur) != BLOBMSG_TYPE_ARRAY) {
+			continue;
+		}
+		blobmsg_for_each_attr(route, cur, rrem) {
+			struct blob_attr *field;
+			const char *target = NULL;
+			int mask = -1;
+			size_t frem;
+
+			blobmsg_for_each_attr(field, route, frem) {
+				if (strcmp(blobmsg_name(field), "target") == 0 && blobmsg_type(field) == BLOBMSG_TYPE_STRING) {
+					target = blobmsg_get_string(field);
+				}
+				if (strcmp(blobmsg_name(field), "mask") == 0 && blobmsg_type(field) == BLOBMSG_TYPE_INT32) {
+					mask = (int)blobmsg_get_u32(field);
+				}
+			}
+			if (apmon_route_is_default(target, mask)) {
+				found = 1;
+			}
+		}
+	}
+	free(out);
+	return up && found;
+}
+
 /*
- * Collector candidate: role 'collector', or role 'auto' and the default route does not go through
- * option device (this node has the upstream gateway).
+ * Collector candidate: role 'collector', or role 'auto' and the upstream gateway is on the WAN:
+ * netifd interface wan or wan6 is up with a default route (as 1.x get_router_state, which looks
+ * for a gateway on network.wan's device). A default route elsewhere (a mesh11sd peer's
+ * br-tun<N> vtun) does not count.
  */
 static int collector_candidate(void)
 {
-	char ifname[32];
-	char gateway[64];
+	int wan = 0;
+	int wan6 = 0;
 
-	if (strcmp(apmond.cfg.role, "collector") == 0) {
-		return 1;
+	if (strcmp(apmond.cfg.role, "auto") == 0) {
+		wan = interface_has_default("wan");
+		wan6 = interface_has_default("wan6");
 	}
-	if (strcmp(apmond.cfg.role, "sender") == 0) {
-		return 0;
-	}
-	if (apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) != 0) {
-		return 0;
-	}
-	if (strcmp(ifname, apmond.cfg.netdev) == 0) {
-		return 0;
-	}
-	return 1;
+	return apmon_collector_candidate(apmond.cfg.role, wan, wan6);
 }
 
 /*

@@ -181,6 +181,21 @@ void apmon_eui64_iid(const uint8_t mac[APMON_ID_LEN], uint8_t out[8]);
  */
 const char *apmon_pick_htmode(const char *const *ap_htmodes, int n, const char *uci_htmode);
 
+/*
+ * Collector role (r18). role: option role ("auto", "collector", "sender").
+ * wan_default / wan6_default: netifd interface wan / wan6 is up and has a default route
+ * (as 1.x: the upstream gateway is on the WAN, not any non-LAN default route such as
+ * mesh11sd's vtun br-tun<N> on a peer). Returns 1 if this node may claim <prefix>::1.
+ */
+int apmon_collector_candidate(const char *role, int wan_default, int wan6_default);
+/* A netifd route entry that is a default route: target 0.0.0.0 or :: with mask 0 */
+int apmon_route_is_default(const char *target, int mask);
+/*
+ * Holding <prefix>::1: count a cycle; 1 when the DAD re-check is due (every 'every' cycles,
+ * 0 = never), and the counter starts again.
+ */
+int apmon_recheck_due(int *cycles, int every);
+
 #define APMON_IFINDEX_SAME 0
 #define APMON_IFINDEX_REBIND 1
 #define APMON_IFINDEX_GONE 2
