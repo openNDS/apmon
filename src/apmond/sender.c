@@ -7,6 +7,7 @@
 
 #include <libubox/blobmsg_json.h>
 
+#include <dirent.h>
 #include <sys/stat.h>
 
 #include "apmond.h"
@@ -22,17 +23,43 @@ uint64_t apmond_sender_time(void)
 	return (uint64_t)((int64_t)apmon_monotonic_ms() + apmond.clock_offset_ms);
 }
 
-/* The device is a port of a bridge (or other master): /sys/class/net/<dev>/master exists */
-static int device_has_master(const char *dev)
+/*
+ * The WAN device's shape: has_master = it is a port of a bridge (or other master device);
+ * if it is a bridge itself, ports = its ports and wireless = those that are Wi-Fi/mesh interfaces.
+ */
+static void wan_device_shape(const char *dev, int *has_master, int *ports, int *wireless)
 {
-	char path[128];
+	char path[160];
 	struct stat st;
+	DIR *d;
+	struct dirent *e;
 
+	*has_master = 0;
+	*ports = 0;
+	*wireless = 0;
 	if (dev[0] == '\0' || strchr(dev, '/') != NULL) {
-		return 0;
+		return;
 	}
 	snprintf(path, sizeof(path), "/sys/class/net/%s/master", dev);
-	return lstat(path, &st) == 0;
+	if (lstat(path, &st) == 0) {
+		*has_master = 1;
+	}
+	snprintf(path, sizeof(path), "/sys/class/net/%s/brif", dev);
+	d = opendir(path);
+	if (d == NULL) {
+		return;
+	}
+	while ((e = readdir(d)) != NULL) {
+		if (e->d_name[0] == '.') {
+			continue;
+		}
+		(*ports)++;
+		snprintf(path, sizeof(path), "/sys/class/net/%s/phy80211", e->d_name);
+		if (lstat(path, &st) == 0) {
+			(*wireless)++;
+		}
+	}
+	closedir(d);
 }
 
 /* netifd interface <name> is an upstream: up, a default route, and not bridged into another device */
@@ -43,7 +70,9 @@ static int interface_has_default(const char *name)
 	struct blob_attr *cur;
 	int up = 0;
 	int found = 0;
-	int bridged = 0;
+	int has_master = 0;
+	int ports = 0;
+	int wireless = 0;
 	size_t rem;
 
 	snprintf(object, sizeof(object), "network.interface.%s", name);
@@ -55,7 +84,7 @@ static int interface_has_default(const char *name)
 		size_t rrem;
 
 		if (strcmp(blobmsg_name(cur), "l3_device") == 0 && blobmsg_type(cur) == BLOBMSG_TYPE_STRING) {
-			bridged = device_has_master(blobmsg_get_string(cur));
+			wan_device_shape(blobmsg_get_string(cur), &has_master, &ports, &wireless);
 			continue;
 		}
 		if (strcmp(blobmsg_name(cur), "up") == 0 && blobmsg_type(cur) == BLOBMSG_TYPE_BOOL) {
@@ -85,14 +114,16 @@ static int interface_has_default(const char *name)
 		}
 	}
 	free(out);
-	return apmon_upstream_from_wan(up, found, bridged);
+	return apmon_upstream_from_wan(up, found, has_master, ports, wireless);
 }
 
 /*
  * Collector candidate: role 'collector', or role 'auto' and the upstream gateway is on the WAN:
  * netifd interface wan or wan6 is up with a default route (as 1.x get_router_state, which looks
- * for a gateway on network.wan's device). A default route on any other device, or a WAN
- * bridged into another device (eg a trunk bridge), does not count.
+ * for a gateway on network.wan's device). A default route on any other device does not
+ * count, nor a WAN whose device is a bridge port (eg bridged into a trunk bridge) or a bridge
+ * that holds more than one port or a Wi-Fi/mesh interface (the upstream is then reached
+ * through other nodes); see apmon_upstream_from_wan.
  */
 static int collector_candidate(void)
 {

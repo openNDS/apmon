@@ -870,10 +870,14 @@ static void test_collector_role(void)
 	CHECK(apmon_collector_candidate("auto", 0, 0) == 0, "role: no wan (vtun default only) -> sender");
 	CHECK(apmon_collector_candidate("collector", 0, 0) == 1, "role: forced collector");
 	CHECK(apmon_collector_candidate("sender", 1, 1) == 0, "role: forced sender");
-	CHECK(apmon_upstream_from_wan(1, 1, 0) == 1, "upstream: wan up with default route");
-	CHECK(apmon_upstream_from_wan(1, 1, 1) == 0, "upstream: wan bridged into a trunk bridge");
-	CHECK(apmon_upstream_from_wan(0, 1, 0) == 0, "upstream: wan down");
-	CHECK(apmon_upstream_from_wan(1, 0, 0) == 0, "upstream: wan without default route");
+	CHECK(apmon_upstream_from_wan(1, 1, 0, 0, 0) == 1, "upstream: plain wan port up with default route");
+	CHECK(apmon_upstream_from_wan(1, 1, 0, 1, 0) == 1, "upstream: br-wan with only the wan port");
+	CHECK(apmon_upstream_from_wan(1, 1, 1, 0, 0) == 0, "upstream: wan port bridged into a trunk bridge (TPE shape)");
+	CHECK(apmon_upstream_from_wan(1, 1, 0, 2, 1) == 0, "upstream: br-wan with wan port + mesh iface (CPE shape)");
+	CHECK(apmon_upstream_from_wan(1, 1, 0, 1, 1) == 0, "upstream: br-wan with only a mesh iface");
+	CHECK(apmon_upstream_from_wan(1, 1, 0, 3, 0) == 0, "upstream: br-wan with several wired ports");
+	CHECK(apmon_upstream_from_wan(0, 1, 0, 0, 0) == 0, "upstream: wan down");
+	CHECK(apmon_upstream_from_wan(1, 0, 0, 0, 0) == 0, "upstream: wan without default route");
 	CHECK(apmon_route_is_default("0.0.0.0", 0) == 1, "route: 0.0.0.0/0");
 	CHECK(apmon_route_is_default("::", 0) == 1, "route: ::/0");
 	CHECK(apmon_route_is_default("0.0.0.0", 24) == 0, "route: not /0");
