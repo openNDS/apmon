@@ -7,6 +7,8 @@
 
 #include <libubox/blobmsg_json.h>
 
+#include <sys/stat.h>
+
 #include "apmond.h"
 
 #define RESYNC_INTERVAL_MS (6ULL * 3600 * 1000)
@@ -20,7 +22,20 @@ uint64_t apmond_sender_time(void)
 	return (uint64_t)((int64_t)apmon_monotonic_ms() + apmond.clock_offset_ms);
 }
 
-/* netifd interface <name> is up and has a default route */
+/* The device is a port of a bridge (or other master): /sys/class/net/<dev>/master exists */
+static int device_has_master(const char *dev)
+{
+	char path[128];
+	struct stat st;
+
+	if (dev[0] == '\0' || strchr(dev, '/') != NULL) {
+		return 0;
+	}
+	snprintf(path, sizeof(path), "/sys/class/net/%s/master", dev);
+	return lstat(path, &st) == 0;
+}
+
+/* netifd interface <name> is an upstream: up, a default route, and not bridged into another device */
 static int interface_has_default(const char *name)
 {
 	char object[64];
@@ -28,6 +43,7 @@ static int interface_has_default(const char *name)
 	struct blob_attr *cur;
 	int up = 0;
 	int found = 0;
+	int bridged = 0;
 	size_t rem;
 
 	snprintf(object, sizeof(object), "network.interface.%s", name);
@@ -38,6 +54,10 @@ static int interface_has_default(const char *name)
 		struct blob_attr *route;
 		size_t rrem;
 
+		if (strcmp(blobmsg_name(cur), "l3_device") == 0 && blobmsg_type(cur) == BLOBMSG_TYPE_STRING) {
+			bridged = device_has_master(blobmsg_get_string(cur));
+			continue;
+		}
 		if (strcmp(blobmsg_name(cur), "up") == 0 && blobmsg_type(cur) == BLOBMSG_TYPE_BOOL) {
 			up = blobmsg_get_bool(cur);
 			continue;
@@ -65,14 +85,14 @@ static int interface_has_default(const char *name)
 		}
 	}
 	free(out);
-	return up && found;
+	return apmon_upstream_from_wan(up, found, bridged);
 }
 
 /*
  * Collector candidate: role 'collector', or role 'auto' and the upstream gateway is on the WAN:
  * netifd interface wan or wan6 is up with a default route (as 1.x get_router_state, which looks
- * for a gateway on network.wan's device). A default route elsewhere (a mesh11sd peer's
- * br-tun<N> vtun) does not count.
+ * for a gateway on network.wan's device). A default route on any other device, or a WAN
+ * bridged into another device (eg a trunk bridge), does not count.
  */
 static int collector_candidate(void)
 {

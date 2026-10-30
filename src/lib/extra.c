@@ -394,3 +394,14 @@ int apmon_recheck_due(int *cycles, int every)
 	*cycles = 0;
 	return 1;
 }
+
+int apmon_upstream_from_wan(int up, int has_default, int bridged)
+{
+	if (!up || !has_default) {
+		return 0;
+	}
+	if (bridged) {
+		return 0;
+	}
+	return 1;
+}

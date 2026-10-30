@@ -188,6 +188,8 @@ const char *apmon_pick_htmode(const char *const *ap_htmodes, int n, const char *
  * mesh11sd's vtun br-tun<N> on a peer). Returns 1 if this node may claim <prefix>::1.
  */
 int apmon_collector_candidate(const char *role, int wan_default, int wan6_default);
+/* A WAN interface is an upstream: up, with a default route, and its device not a bridge port */
+int apmon_upstream_from_wan(int up, int has_default, int bridged);
 /* A netifd route entry that is a default route: target 0.0.0.0 or :: with mask 0 */
 int apmon_route_is_default(const char *target, int mask);
 /*
