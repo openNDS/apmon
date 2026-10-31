@@ -1146,50 +1146,6 @@ static void add_wired(struct apmond *a, struct apmon_json *clients, uint64_t now
 }
 
 
-/* ---------- host pid from procd ---------- */
-
-static int host_pid;
-
-/*
- * Our pid as procd sees it (ubus service list name=apmond: instances.*.pid). In a ujail
- * with a PID namespace getpid() is 1; this is the pid ps and kill use. Asked from the report
- * cycle, never inside a ubus handler, and cached until found.
- */
-static void refresh_host_pid(struct apmond *a)
-{
-	struct blob_buf b;
-	struct blob_attr *list = NULL;
-	struct blob_attr *instances;
-	struct blob_attr *inst;
-	size_t rem;
-
-	if (host_pid > 0) {
-		return;
-	}
-	memset(&b, 0, sizeof(b));
-	blob_buf_init(&b, 0);
-	blobmsg_add_string(&b, "name", "apmond");
-	apmond_ubus_call(a->ubus, "service", "list", b.head, &list);
-	blob_buf_free(&b);
-	instances = blob_child(blob_child_top(list, "apmond"), "instances");
-	if (instances != NULL) {
-		blobmsg_for_each_attr(inst, instances, rem) {
-			struct blob_attr *pid = blob_child(inst, "pid");
-
-			if (pid != NULL && blobmsg_type(pid) == BLOBMSG_TYPE_INT32) {
-				host_pid = (int)blobmsg_get_u32(pid);
-				break;
-			}
-		}
-	}
-	free(list);
-}
-
-int apmond_host_pid(void)
-{
-	return host_pid;
-}
-
 /* ---------- report ---------- */
 
 char *apmond_build_report(struct apmond *a, uint64_t now_ms)
@@ -1201,7 +1157,6 @@ char *apmond_build_report(struct apmond *a, uint64_t now_ms)
 		return NULL;
 	}
 
-	refresh_host_pid(a);
 	apmon_json_init(&j);
 	apmon_json_init(&clients);
 

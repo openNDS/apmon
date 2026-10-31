@@ -140,7 +140,6 @@ void apmond_set_debuglevel(int level);
 
 /* collect.c - build the REPORT plaintext */
 char *apmond_build_report(struct apmond *a, uint64_t now_ms);
-int apmond_host_pid(void);
 int apmond_lan_gateway(struct ubus_context *ctx, char *out, size_t len);
 int apmond_default_route(char *ifname, size_t ifname_len, char *gateway, size_t gw_len);
 int apmond_ubus_call(struct ubus_context *ctx, const char *object, const char *method,

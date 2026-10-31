@@ -1016,13 +1016,77 @@ static int jailed_child_pid(int pid)
 	return child;
 }
 
-/* apmond status, with "pid" the daemon's own host pid (see jailed_child_pid) */
+static void procd_pid_cb(struct ubus_request *req, int type, struct blob_attr *msg)
+{
+	int *pid = req->priv;
+	struct blob_attr *svc;
+	struct blob_attr *field;
+	struct blob_attr *inst;
+	struct blob_attr *attr;
+	size_t r1;
+	size_t r2;
+	size_t r3;
+	size_t r4;
+
+	(void)type;
+	blob_for_each_attr(svc, msg, r1) {
+		blobmsg_for_each_attr(field, svc, r2) {
+			if (strcmp(blobmsg_name(field), "instances") != 0) {
+				continue;
+			}
+			blobmsg_for_each_attr(inst, field, r3) {
+				blobmsg_for_each_attr(attr, inst, r4) {
+					if (*pid == 0 && strcmp(blobmsg_name(attr), "pid") == 0 &&
+					    blobmsg_type(attr) == BLOBMSG_TYPE_INT32) {
+						*pid = (int)blobmsg_get_u32(attr);
+					}
+				}
+			}
+		}
+	}
+}
+
+/*
+ * The daemon's host pid: procd's instance pid (ubus service list), or its child when that is
+ * the ujail wrapper. Only the CLI (root, host /proc) can see it; the jailed daemon is pid 1.
+ */
+static int daemon_pid(void)
+{
+	struct ubus_context *ctx = ubus_connect(NULL);
+	struct blob_buf b;
+	uint32_t id;
+	int pid = 0;
+	int child;
+
+	if (ctx == NULL) {
+		return 0;
+	}
+	memset(&b, 0, sizeof(b));
+	blob_buf_init(&b, 0);
+	blobmsg_add_string(&b, "name", "apmond");
+	if (ubus_lookup_id(ctx, "service", &id) == 0) {
+		ubus_invoke(ctx, id, "list", b.head, procd_pid_cb, &pid, 3000);
+	}
+	blob_buf_free(&b);
+	ubus_free(ctx);
+	if (pid <= 0) {
+		return 0;
+	}
+	child = jailed_child_pid(pid);
+	if (child > 0) {
+		return child;
+	}
+	return pid;
+}
+
+/* apmond status: the ubus status plus "pid", the daemon's host pid (null if unknown) */
 static int show_status(void)
 {
 	struct blob_attr *msg;
 	struct blob_attr *cur;
 	struct blob_buf b;
 	size_t rem;
+	int pid;
 	int ret = call("status", NULL, &msg);
 
 	if (ret != 0) {
@@ -1030,18 +1094,18 @@ static int show_status(void)
 		free(msg);
 		return 1;
 	}
+	pid = daemon_pid();
 	memset(&b, 0, sizeof(b));
 	blob_buf_init(&b, 0);
 	blob_for_each_attr(cur, msg, rem) {
-		int child = 0;
-
-		if (strcmp(blobmsg_name(cur), "pid") == 0 && blobmsg_type(cur) == BLOBMSG_TYPE_INT32) {
-			child = jailed_child_pid((int)blobmsg_get_u32(cur));
+		blobmsg_add_blob(&b, cur);
+		if (strcmp(blobmsg_name(cur), "version") != 0) {
+			continue;
 		}
-		if (child > 0) {
-			blobmsg_add_u32(&b, "pid", (uint32_t)child);
+		if (pid > 0) {
+			blobmsg_add_u32(&b, "pid", (uint32_t)pid);
 		} else {
-			blobmsg_add_blob(&b, cur);
+			blobmsg_add_field(&b, BLOBMSG_TYPE_UNSPEC, "pid", NULL, 0);
 		}
 	}
 	free(msg);
