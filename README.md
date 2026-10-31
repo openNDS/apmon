@@ -10,9 +10,9 @@ Status: **2.0.0beta, first testable build.** Protocol: [docs/PROTOCOL.md](docs/P
 
 | Path | What |
 |---|---|
-| `src/lib` | libapmon: PBKDF2/HKDF key derivation, AES-256-GCM envelope, replay cache, JSON writer (crypto backend: mbedtls) |
+| `src/lib` | libapmon: PBKDF2/HKDF key derivation, AES-256-GCM envelope, replay cache, JSON writer; crypto through `crypto.h` with an mbedtls or OpenSSL 3 backend (`-DCRYPTO_BACKEND=mbedtls\|openssl`) |
 | `src/apmond` | the daemon: uloop, uci, ubus, data collection, sender, collector (libmicrohttpd) |
-| `tests` | host unit tests (`make -C tests check`, add `MBEDTLS_DIR=<mbedtls 3.6 tree>` if the system has no mbedtls) and test vectors |
+| `tests` | host unit tests (`make -C tests check`, `CRYPTO=openssl` for the OpenSSL backend, `check-all` for both; add `MBEDTLS_DIR=<mbedtls 3.6 tree>` if the system has no mbedtls) and test vectors |
 | `openwrt/apmond` | OpenWrt package (Makefile, `files/apmond.config`, `files/apmond.init`) |
 
 ## Using it
@@ -80,7 +80,7 @@ Every AP and client carries `vlan`: the access VLAN of its bridge port (PVID on 
 
 `apmond debuglevel` prints the level; `apmond debuglevel N` (or `ubus call apmond debuglevel '{"level":N}'`) applies it at once and commits `option debuglevel` to /etc/config/apmond, as 1.x did, so it persists. A change made with `uci set apmond.setup.debuglevel=N; uci commit apmond` is picked up on the next report cycle. Every change is logged at notice level.
 
-As apmond 1.x: messages above `debuglevel` (0 errors, 1 notices (default), 2 info, 3 debug) are dropped and identical consecutive messages are written once. Errors and notices go to syslog and to the log file; info and debug go to the log file only. The log file is `<log_mountpoint>/apmond/apmond_log.log` (default `/tmp/apmond/apmond_log.log`), trimmed to `max_log_entries` lines (500), each line `<date> daemon.<level> apmond: [<n>] <message>` (r20+: no pid, as in a ujail it would read 1; `apmond status` shows the host pid from procd as `pid`). A `log_mountpoint` that is not mounted disables the log file so it can't fill flash.
+As apmond 1.x: messages above `debuglevel` (0 errors, 1 notices (default), 2 info, 3 debug) are dropped and identical consecutive messages are written once. Errors and notices go to syslog and to the log file; info and debug go to the log file only. The log file is `<log_mountpoint>/apmond/apmond_log.log` (default `/tmp/apmond/apmond_log.log`), trimmed to `max_log_entries` lines (500), each line `<date> daemon.<level> apmond: [<n>] <message>` (r20+: no pid, as in a ujail it would read 1; `apmond status` shows the daemon's host pid as `pid`; ubus `status` has procd's instance pid, which is the ujail wrapper when jailed). A `log_mountpoint` that is not mounted disables the log file so it can't fill flash.
 
 ## Adding data from other programs (extension blocks)
 
@@ -140,3 +140,23 @@ The CLI (`apmond status`, `nodes`, ...) runs as root outside the jail and talks 
 `build_commit` comes from `.build_commit`, which holds `$Format:%h$`: `git archive` and
 GitHub release tarballs fill in the short commit (`.gitattributes` export-subst). A build
 from a plain checkout asks git, else shows "unknown".
+
+## Crypto backends: apmond and apmond-openssl
+
+One Makefile builds two variants that differ only in the crypto library: `apmond`
+(mbedTLS, the default, what `apk add apmond` and luci-app-apmond get) and `apmond-openssl`
+(OpenSSL 3 libcrypto, for images that already carry OpenSSL). They are wire compatible and
+can be mixed freely on one network; both pass the same test vectors. They conflict with each
+other (`apmond-openssl` provides `apmond`) and share the config, init script, ACL and
+capabilities. To switch a node, keeping `/etc/config/apmond`:
+
+    apk del apmond && apk add apmond-openssl     # or back: apk del apmond-openssl && apk add apmond
+
+`ubus call apmond status` shows the backend in use as `crypto`.
+
+mbedTLS (`apmond`) is the default and the recommended variant, especially on small or
+legacy devices (16 MB flash, eg GL-MT300N-V2, GL-AR300M16): OpenWrt images already
+carry libmbedtls, so apmond adds only itself (~50 KB package). `apmond-openssl` pulls in
+libopenssl3 from the package feed, which costs about 2.4 MB of overlay flash (aarch64,
+UBIFS-compressed; 4.9 MiB installed) unless the image already has it. It installs with
+apk like any package, no custom image needed.

@@ -220,7 +220,7 @@ A sender MUST NOT trust an ACK/ERROR whose tag fails or whose `echo_nonce` does 
 - `magic` stays `APM2` for this envelope; `version` is bumped only for an incompatible envelope or crypto change (collector answers 426).
 - New header semantics use reserved `flags` bits, which receivers reject until they understand them.
 - Payload evolution is additive JSON: new optional fields, `v` stays 2. A breaking payload change bumps `v` and the path (`/apmon/v3/...`).
-- New crypto backends (openssl, wolfssl builds) MUST produce byte-identical output; the test vectors are the conformance check.
+- Crypto backends MUST produce byte-identical output; the test vectors are the conformance check. r21+ has two, mbedtls (`apmond`) and OpenSSL 3 (`apmond-openssl`): same AES-256-GCM, PBKDF2-HMAC-SHA256 (50000 iterations) and HKDF-SHA256 (libapmon's own, over the backend's HMAC-SHA256), so nodes with either backend interoperate on one network.
 
 ## 9. What the collector stores and exposes
 

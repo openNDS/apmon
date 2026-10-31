@@ -10,9 +10,16 @@
 #include <mbedtls/gcm.h>
 #include <mbedtls/md.h>
 #include <mbedtls/pkcs5.h>
+#include <mbedtls/version.h>
 
 #include "apmon.h"
 
+const char *apmon_crypto_backend(void)
+{
+	return "mbedtls " MBEDTLS_VERSION_STRING;
+}
+
+/* getrandom(2): the kernel CSPRNG, blocking only until it is seeded at boot */
 int apmon_random(void *buf, size_t len)
 {
 	uint8_t *p = buf;

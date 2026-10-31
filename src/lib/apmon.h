@@ -71,16 +71,8 @@ struct apmon_header {
 	uint32_t ct_len;
 };
 
-/* crypto.c (backend selected at build time; mbedtls for now) */
-int apmon_random(void *buf, size_t len);
-int apmon_pbkdf2_sha256(const uint8_t *pw, size_t pw_len, const uint8_t *salt, size_t salt_len,
-			unsigned int iterations, uint8_t *out, size_t out_len);
-int apmon_hmac_sha256(const uint8_t *key, size_t key_len, const uint8_t *data, size_t data_len,
-		      uint8_t out[32]);
-int apmon_gcm_seal(const uint8_t key[APMON_KEY_LEN], const uint8_t nonce[APMON_NONCE_LEN],
-		   const uint8_t *aad, size_t aad_len, const uint8_t *pt, size_t pt_len, uint8_t *ct_tag);
-int apmon_gcm_open(const uint8_t key[APMON_KEY_LEN], const uint8_t nonce[APMON_NONCE_LEN],
-		   const uint8_t *aad, size_t aad_len, const uint8_t *ct_tag, size_t ct_tag_len, uint8_t *pt);
+/* crypto backend: crypto.h (crypto_mbedtls.c or crypto_openssl.c) */
+#include "crypto.h"
 
 /* kdf.c */
 int apmon_hkdf_extract(const uint8_t *salt, size_t salt_len, const uint8_t *ikm, size_t ikm_len,
@@ -163,8 +155,6 @@ struct apmon_table {
 	int columns;
 };
 
-int apmon_sha256(const uint8_t *data, size_t len, uint8_t out[32]);
-int apmon_sha256_file(const char *path, char hex[65]);
 int apmon_restart_needed(const char *running_sha256, const char *installed_sha256);
 void apmon_short_hash(const char *hash, char out[9]);
 int apmon_ula_prefix(const char *passphrase, uint8_t out[8]);

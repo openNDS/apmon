@@ -1,2 +1,3 @@
 build/
 tests/test_apmon
+tests/test_apmon_openssl

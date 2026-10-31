@@ -1042,6 +1042,7 @@ static void test_nl80211(void)
 
 int main(void)
 {
+	printf("crypto backend: %s\n", apmon_crypto_backend());
 	test_nl80211();
 	test_collector_role();
 	test_pick_htmode();

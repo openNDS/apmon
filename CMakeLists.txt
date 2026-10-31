@@ -3,17 +3,24 @@ project(apmon C)
 
 option(BUILD_DAEMON "Build the apmond daemon (needs libubox, libubus, libuci, libmicrohttpd)" ON)
 option(BUILD_TESTS "Build the host unit tests" OFF)
-set(CRYPTO_BACKEND "mbedtls" CACHE STRING "Crypto backend: mbedtls (openssl, wolfssl later)")
+set(CRYPTO_BACKEND "mbedtls" CACHE STRING "Crypto backend: mbedtls or openssl")
 
 set(CMAKE_C_STANDARD 99)
 add_compile_options(-Wall -Wextra -Werror -D_GNU_SOURCE)
 
-if(NOT CRYPTO_BACKEND STREQUAL "mbedtls")
-	message(FATAL_ERROR "Only CRYPTO_BACKEND=mbedtls is implemented so far")
+if(CRYPTO_BACKEND STREQUAL "mbedtls")
+	set(CRYPTO_SOURCE src/lib/crypto_mbedtls.c)
+	set(CRYPTO_LIBS mbedcrypto)
+elseif(CRYPTO_BACKEND STREQUAL "openssl")
+	set(CRYPTO_SOURCE src/lib/crypto_openssl.c)
+	set(CRYPTO_LIBS crypto)
+else()
+	message(FATAL_ERROR "CRYPTO_BACKEND must be mbedtls or openssl, not ${CRYPTO_BACKEND}")
 endif()
+message(STATUS "apmon crypto backend: ${CRYPTO_BACKEND}")
 
 add_library(apmon STATIC
-	src/lib/crypto_mbedtls.c
+	${CRYPTO_SOURCE}
 	src/lib/kdf.c
 	src/lib/envelope.c
 	src/lib/replay.c
@@ -27,7 +34,7 @@ add_library(apmon STATIC
 )
 target_include_directories(apmon PUBLIC src/lib)
 set_property(TARGET apmon PROPERTY POSITION_INDEPENDENT_CODE ON)
-target_link_libraries(apmon PUBLIC mbedcrypto m)
+target_link_libraries(apmon PUBLIC ${CRYPTO_LIBS} m)
 
 # Build identity (apmond package_version / build_commit). The OpenWrt Makefile passes both;
 # a host build uses git describe / git rev-parse, else "dev" / a .build_commit file / "unknown".

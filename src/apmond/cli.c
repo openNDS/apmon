@@ -3,6 +3,7 @@
  * JSON output by default (as "ubus call" prints it), -t / --table for aligned text tables.
  * SPDX-License-Identifier: GPL-2.0-only
  */
+#include <dirent.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -338,32 +339,6 @@ static void flatten_top(struct apmon_table *t, struct blob_attr *msg, const char
 }
 
 /* ---------- commands ---------- */
-
-static int show_key_values(const char *method, struct blob_attr *args, const char *skip)
-{
-	struct blob_attr *msg;
-	struct apmon_table t;
-	int ret = call(method, args, &msg);
-
-	if (ret != 0) {
-		fprintf(stderr, "%s failed: %s\n", method, ubus_strerror(ret));
-		free(msg);
-		return 1;
-	}
-	if (!table_mode) {
-		print_json(msg);
-		free(msg);
-		return 0;
-	}
-	apmon_table_init(&t, 2);
-	apmon_table_add(&t, "KEY");
-	apmon_table_add(&t, "VALUE");
-	flatten_top(&t, msg, skip);
-	print_table(&t);
-	apmon_table_free(&t);
-	free(msg);
-	return 0;
-}
 
 static void print_table_indented(struct apmon_table *t, const char *indent)
 {
@@ -986,6 +961,107 @@ static int cmd_debuglevel(int argc, char **argv)
 	return 0;
 }
 
+/*
+ * procd's instance pid is the ujail wrapper when apmond runs jailed; the daemon cannot see
+ * past its PID namespace, so the CLI (root, host /proc) swaps in the jailed child's pid.
+ */
+static int jailed_child_pid(int pid)
+{
+	char path[300];
+	char cmd[32];
+	DIR *d;
+	struct dirent *e;
+	FILE *f;
+	size_t n;
+	int child = 0;
+
+	snprintf(path, sizeof(path), "/proc/%d/cmdline", pid);
+	f = fopen(path, "r");
+	if (f == NULL) {
+		return 0;
+	}
+	n = fread(cmd, 1, sizeof(cmd) - 1, f);
+	fclose(f);
+	cmd[n] = '\0';
+	if (strcmp(cmd, "/sbin/ujail") != 0) {
+		return 0;
+	}
+	d = opendir("/proc");
+	if (d == NULL) {
+		return 0;
+	}
+	while (child == 0 && (e = readdir(d)) != NULL) {
+		char line[64];
+		int ppid;
+
+		if (e->d_name[0] < '1' || e->d_name[0] > '9') {
+			continue;
+		}
+		snprintf(path, sizeof(path), "/proc/%s/status", e->d_name);
+		f = fopen(path, "r");
+		if (f == NULL) {
+			continue;
+		}
+		while (fgets(line, sizeof(line), f) != NULL) {
+			if (sscanf(line, "PPid: %d", &ppid) == 1) {
+				if (ppid == pid) {
+					child = atoi(e->d_name);
+				}
+				break;
+			}
+		}
+		fclose(f);
+	}
+	closedir(d);
+	return child;
+}
+
+/* apmond status, with "pid" the daemon's own host pid (see jailed_child_pid) */
+static int show_status(void)
+{
+	struct blob_attr *msg;
+	struct blob_attr *cur;
+	struct blob_buf b;
+	size_t rem;
+	int ret = call("status", NULL, &msg);
+
+	if (ret != 0) {
+		fprintf(stderr, "status failed: %s\n", ubus_strerror(ret));
+		free(msg);
+		return 1;
+	}
+	memset(&b, 0, sizeof(b));
+	blob_buf_init(&b, 0);
+	blob_for_each_attr(cur, msg, rem) {
+		int child = 0;
+
+		if (strcmp(blobmsg_name(cur), "pid") == 0 && blobmsg_type(cur) == BLOBMSG_TYPE_INT32) {
+			child = jailed_child_pid((int)blobmsg_get_u32(cur));
+		}
+		if (child > 0) {
+			blobmsg_add_u32(&b, "pid", (uint32_t)child);
+		} else {
+			blobmsg_add_blob(&b, cur);
+		}
+	}
+	free(msg);
+
+	if (!table_mode) {
+		print_json(b.head);
+	} else {
+		struct apmon_table t;
+
+		apmon_table_init(&t, 2);
+		apmon_table_add(&t, "KEY");
+		apmon_table_add(&t, "VALUE");
+		flatten_top(&t, b.head, NULL);
+		print_table(&t);
+		apmon_table_free(&t);
+	}
+	blob_buf_free(&b);
+	return 0;
+}
+
 int apmond_cli(int argc, char **argv)
 {
 	char *args[16];
@@ -1010,7 +1086,7 @@ int apmond_cli(int argc, char **argv)
 	}
 
 	if (strcmp(args[0], "status") == 0 && n == 1) {
-		return show_key_values("status", NULL, NULL);
+		return show_status();
 	}
 	if (strcmp(args[0], "nodes") == 0 && n == 1) {
 		return cmd_nodes();

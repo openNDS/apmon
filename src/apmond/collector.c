@@ -794,6 +794,7 @@ static int ubus_status(struct ubus_context *ctx, struct ubus_object *obj, struct
 
 	blob_buf_init(&bb, 0);
 	blobmsg_add_string(&bb, "version", APMOND_VERSION);
+	blobmsg_add_string(&bb, "crypto", apmon_crypto_backend());
 	if (apmond_host_pid() > 0) {
 		blobmsg_add_u32(&bb, "pid", (uint32_t)apmond_host_pid());
 	} else {
