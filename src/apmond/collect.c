@@ -486,7 +486,7 @@ static void add_wifi_client(struct apmon_json *j, const struct apmon_wifi_sta *s
  * htmode prefix (what the radio is configured for), else the wiphy capabilities for the band,
  * the width the widest any interface of the phy runs. uci htmode as is if nl80211 has no width.
  */
-static void write_radio_fields(struct apmon_json *j, const struct apmon_wifi_iface *ifs, const int *rep, int count,
+static void write_radio_fields(struct apmon_json *j, const struct apmon_wifi_iface *ifs, const int *rep, const int *group, int count,
 			       int first, const char *phy, const char *const *phys, const struct uci_wifi *uw,
 			       const struct apmond_wiphy_caps *caps)
 {
@@ -499,7 +499,7 @@ static void write_radio_fields(struct apmon_json *j, const struct apmon_wifi_ifa
 	int k;
 
 	for (k = first; k < count; k++) {
-		if (!rep[k] || strcmp(phys[k], phy) != 0) {
+		if (!rep[k] || strcmp(phys[k], phy) != 0 || group[k] != group[first]) {
 			continue;
 		}
 		if (src < 0 && ifs[k].freq > 0) {
@@ -547,6 +547,7 @@ struct wifi_state {
 	struct uci_wifi uw[MAX_WIFI_IFACES];
 	char phys[MAX_WIFI_IFACES][IFNAMSIZ];
 	const char *phyp[MAX_WIFI_IFACES];
+	int group[MAX_WIFI_IFACES];	/* apmon_wifi_radio_key: the radio of the phy */
 	int rep[MAX_WIFI_IFACES];
 	struct apmond_wiphy_caps caps;
 	struct apmon_wifi_sta stas[MAX_STATIONS];
@@ -696,6 +697,62 @@ int apmond_lan_gateway(struct ubus_context *ctx, char *out, size_t len)
 	return ret;
 }
 
+
+/* An interface whose radio is unknown (no mask, no frequency: down) joins its phy's first radio */
+static void resolve_unknown_groups(struct wifi_state *w, int count)
+{
+	int i;
+	int k;
+
+	for (i = 0; i < count; i++) {
+		if (w->group[i] != -1) {
+			continue;
+		}
+		for (k = 0; k < count; k++) {
+			if (w->group[k] != -1 && strcmp(w->phys[k], w->phys[i]) == 0) {
+				w->group[i] = w->group[k];
+				break;
+			}
+		}
+	}
+}
+
+static int same_radio(const struct wifi_state *w, int a, int b)
+{
+	if (strcmp(w->phys[a], w->phys[b]) != 0) {
+		return 0;
+	}
+	return w->group[a] == w->group[b];
+}
+
+
+/*
+ * "radio": the radio index of a multi-radio wiphy (null when the kernel gives no radio mask),
+ * "band": 2g/5g/6g/60g from the first interface of the radio with a frequency.
+ */
+static void write_radio_id(struct apmon_json *j, const struct wifi_state *w, int first, int count)
+{
+	const char *band = NULL;
+	int idx = apmon_wifi_radio_index(w->group[first]);
+	int k;
+
+	if (idx >= 0) {
+		apmon_json_int(j, "radio", idx);
+	} else {
+		apmon_json_null(j, "radio");
+	}
+	for (k = first; k < count && band == NULL; k++) {
+		if (w->rep[k] && same_radio(w, k, first)) {
+			band = apmon_band_name(w->ifs[k].freq);
+		}
+	}
+	if (band != NULL) {
+		apmon_json_string(j, "band", band);
+	} else {
+		apmon_json_null(j, "band");
+	}
+}
+
 static void write_iface(struct apmon_json *j, struct wifi_state *w, int k, uint64_t now_ms)
 {
 	const struct apmon_wifi_iface *ifc = &w->ifs[k];
@@ -757,6 +814,7 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 		w->rep[i] = is_reported(&w->ifs[i]);
 		phy_name(&w->ifs[i], w->phys[i], sizeof(w->phys[i]));
 		w->phyp[i] = w->phys[i];
+		w->group[i] = apmon_wifi_radio_key(w->ifs[i].radio_mask, w->ifs[i].freq);
 		if (w->rep[i]) {
 			uci_wifi_lookup(ctx, pkg, w->ifs[i].ifname, &w->uw[i]);
 		}
@@ -768,6 +826,7 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 		uci_free_context(ctx);
 	}
 	netifd_wifi_lookup(a, w, count);
+	resolve_unknown_groups(w, count);
 
 	for (i = 0; i < count; i++) {
 		int first_of_phy = 1;
@@ -776,7 +835,7 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 			continue;
 		}
 		for (k = 0; k < i; k++) {
-			if (w->rep[k] && strcmp(w->phys[k], w->phys[i]) == 0) {
+			if (w->rep[k] && same_radio(w, k, i)) {
 				first_of_phy = 0;
 			}
 		}
@@ -786,17 +845,18 @@ static void add_wifi(struct apmond *a, struct apmon_json *j, struct apmon_json *
 
 		apmon_json_open_object(j, NULL);
 		apmon_json_string(j, "phy", w->phys[i]);
-		write_radio_fields(j, w->ifs, w->rep, count, i, w->phys[i], w->phyp, w->uw, &w->caps);
+		write_radio_id(j, w, i, count);
+		write_radio_fields(j, w->ifs, w->rep, w->group, count, i, w->phys[i], w->phyp, w->uw, &w->caps);
 		apmon_json_open_array(j, "aps");
 		for (k = i; k < count; k++) {
-			if (w->ifs[k].iftype == NL80211_IFTYPE_AP && strcmp(w->phys[k], w->phys[i]) == 0) {
+			if (w->ifs[k].iftype == NL80211_IFTYPE_AP && same_radio(w, k, i)) {
 				write_iface(j, w, k, now_ms);
 			}
 		}
 		apmon_json_close_array(j);
 		apmon_json_open_array(j, "mesh");
 		for (k = i; k < count; k++) {
-			if (w->ifs[k].iftype == NL80211_IFTYPE_MESH_POINT && strcmp(w->phys[k], w->phys[i]) == 0) {
+			if (w->ifs[k].iftype == NL80211_IFTYPE_MESH_POINT && same_radio(w, k, i)) {
 				write_iface(j, w, k, now_ms);
 			}
 		}

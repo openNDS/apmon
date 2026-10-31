@@ -147,6 +147,9 @@ int apmon_nl80211_parse_iface(const void *attrs, size_t len, struct apmon_wifi_i
 		out->txpower_mbm = (int)u;
 		out->have_txpower = 1;
 	}
+	if (get_u32(attrs, len, NL80211_ATTR_VIF_RADIO_MASK, &u) == 0) {
+		out->radio_mask = u;
+	}
 	return 0;
 }
 
@@ -473,5 +476,55 @@ const char *apmon_iftype_name(int iftype)
 		return "adhoc";
 	default:
 		return "other";
+	}
+}
+
+/* ---------- radios of a multi-radio wiphy ---------- */
+
+/*
+ * Which underlying radio of its wiphy an interface is on, as a grouping key: the lowest bit of
+ * its radio mask (0..31) when the kernel gives one, else 100 + its nl80211 band from the
+ * frequency (one radio per band on wiphys without radio masks), else -1 (unknown, eg down).
+ */
+int apmon_wifi_radio_key(uint32_t radio_mask, int freq)
+{
+	int bit;
+	int band;
+
+	for (bit = 0; bit < 32; bit++) {
+		if (radio_mask & (1u << bit)) {
+			return bit;
+		}
+	}
+	band = apmon_freq_band(freq);
+	if (band < 0) {
+		return -1;
+	}
+	return 100 + band;
+}
+
+/* The radio index for "radio" in reports: the mask bit, or -1 (null) when grouped by band */
+int apmon_wifi_radio_index(int key)
+{
+	if (key >= 0 && key < 32) {
+		return key;
+	}
+	return -1;
+}
+
+/* "2g", "5g", "6g", "60g" as uci wireless band, or NULL */
+const char *apmon_band_name(int freq)
+{
+	switch (apmon_freq_band(freq)) {
+	case NL80211_BAND_2GHZ:
+		return "2g";
+	case NL80211_BAND_5GHZ:
+		return "5g";
+	case NL80211_BAND_6GHZ:
+		return "6g";
+	case NL80211_BAND_60GHZ:
+		return "60g";
+	default:
+		return NULL;
 	}
 }

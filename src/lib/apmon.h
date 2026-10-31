@@ -290,6 +290,7 @@ struct apmon_wifi_iface {
 	int width;		/* NL80211_CHAN_WIDTH_*, -1 unknown */
 	int txpower_mbm;
 	int have_txpower;
+	uint32_t radio_mask;	/* NL80211_ATTR_VIF_RADIO_MASK (multi-radio wiphys, kernel 6.12+), 0 if absent */
 };
 
 #define APMON_STA_INACTIVE 0x001
@@ -328,3 +329,6 @@ int apmon_htmode_family(const char *htmode);
 int apmon_wider_width(int a, int b);
 int apmon_htmode_string(int family, int width, char *out, size_t len);
 const char *apmon_iftype_name(int iftype);
+int apmon_wifi_radio_key(uint32_t radio_mask, int freq);
+int apmon_wifi_radio_index(int key);
+const char *apmon_band_name(int freq);

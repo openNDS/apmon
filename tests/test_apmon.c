@@ -1038,6 +1038,26 @@ static void test_nl80211(void)
 	      "width: widest across ifaces");
 	CHECK(apmon_wider_width(NL80211_CHAN_WIDTH_160, -1) == NL80211_CHAN_WIDTH_160, "width: unknown loses");
 	CHECK(strcmp(apmon_iftype_name(NL80211_IFTYPE_MESH_POINT), "mesh") == 0, "iftype: mesh");
+
+	/* r23 multi-radio wiphys (MT3600BE: one phy0, radio 0 = 2.4 GHz, radio 1 = 5 GHz) */
+	memset(&n, 0, sizeof(n));
+	nl_put_u32(&n, NL80211_ATTR_IFINDEX, 25);
+	nl_put_u32(&n, NL80211_ATTR_WIPHY, 0);
+	nl_put_u32(&n, NL80211_ATTR_WIPHY_FREQ, 5180);
+	nl_put_u32(&n, NL80211_ATTR_VIF_RADIO_MASK, 0x2);
+	CHECK(apmon_nl80211_parse_iface(n.b, n.len, &ifc) == 0 && ifc.radio_mask == 0x2, "radio: mask parsed");
+	CHECK(apmon_wifi_radio_key(ifc.radio_mask, ifc.freq) == 1, "radio: mask bit 1 -> radio 1");
+	CHECK(apmon_wifi_radio_key(0x1, 5180) == 0, "radio: mask wins over band");
+	CHECK(apmon_wifi_radio_index(apmon_wifi_radio_key(0x2, 2412)) == 1, "radio: index from mask");
+	CHECK(apmon_wifi_radio_key(0, 2412) != apmon_wifi_radio_key(0, 5180), "radio: no mask, 2.4 and 5 GHz apart");
+	CHECK(apmon_wifi_radio_key(0, 2412) == apmon_wifi_radio_key(0, 2437), "radio: no mask, same band together");
+	CHECK(apmon_wifi_radio_index(apmon_wifi_radio_key(0, 5180)) == -1, "radio: no mask -> index null");
+	CHECK(apmon_wifi_radio_key(0, 0) == -1, "radio: unknown when no mask and no frequency");
+	CHECK(strcmp(apmon_band_name(2412), "2g") == 0 && strcmp(apmon_band_name(5180), "5g") == 0 &&
+	      strcmp(apmon_band_name(5955), "6g") == 0 && apmon_band_name(0) == NULL, "band names");
+	memset(&n, 0, sizeof(n));
+	nl_put_u32(&n, NL80211_ATTR_IFINDEX, 7);
+	CHECK(apmon_nl80211_parse_iface(n.b, n.len, &ifc) == 0 && ifc.radio_mask == 0, "radio: no mask attribute -> 0");
 }
 
 int main(void)
