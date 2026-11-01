@@ -38,6 +38,7 @@ static int added_router;
 static int misses;
 static int claim_delay_done;
 static int backed_off;
+static int listen_blocked;
 
 /* ---------- rtnetlink address add/delete ---------- */
 
@@ -280,22 +281,34 @@ static int drop_router(const char *fmt)
 	added_router = 0;
 	misses = 0;
 	backed_off = 1;
+	claim_delay_done = 0;
 	set_reason(fmt, apmond.router_ula);
 	return 0;
 }
 
 /*
- * The collector listener could not start (r25): holding ::1 without a listener makes peers
- * see ECONNREFUSED, which router_answers() treats as in use, so nobody would collect.
- * Give up ::1 through the DAD-conflict path: backed_off makes the next claim wait
- * router_takeover_misses silent checks, so a listener that keeps failing cannot flap every cycle.
+ * The collector listener failed while this node held ::1 (r25, r26): holding ::1 without a
+ * listener makes peers see ECONNREFUSED, which router_answers() treats as in use, so nobody
+ * would collect. Give up ::1 through the DAD-conflict path and stay a sender until a listener
+ * probe succeeds again (apmond_ula_set_listen_ok), so a broken node never re-enters the race.
  */
 void apmond_ula_give_up_router(void)
 {
+	listen_blocked = 1;
 	if (!have_prefix) {
 		return;
 	}
-	drop_router("backed off: collector listener failed to start, %s given up");
+	drop_router("backed off: collector listener failed, %s given up");
+}
+
+/* Listen before claim (r26): the caller probes the listener before each claim attempt */
+void apmond_ula_set_listen_ok(int ok)
+{
+	if (ok) {
+		listen_blocked = 0;
+	} else {
+		listen_blocked = 1;
+	}
 }
 
 /*
@@ -351,6 +364,7 @@ int apmond_ula_tick(int candidate)
 	if (!candidate) {
 		misses = 0;
 		backed_off = 0;
+		claim_delay_done = 0;
 		if (addr_flags(&router_addr) >= 0) {
 			del_address(&router_addr);
 			added_router = 0;
@@ -375,9 +389,18 @@ int apmond_ula_tick(int candidate)
 		return 1;
 	}
 
+	if (listen_blocked) {
+		misses = 0;
+		backed_off = 1;
+		claim_delay_done = 0;
+		set_reason("sender: collector listener cannot open, not claiming %s", apmond.router_ula);
+		return 0;
+	}
+
 	if (router_answers()) {
 		misses = 0;
 		backed_off = 1;
+		claim_delay_done = 0;
 		set_reason("backed off: %s is already in use by another collector", apmond.router_ula);
 		return 0;
 	}
@@ -402,6 +425,7 @@ int apmond_ula_tick(int candidate)
 		}
 		if (router_answers()) {
 			backed_off = 1;
+			claim_delay_done = 0;
 			set_reason("backed off: %s claimed by another collector during the startup delay", apmond.router_ula);
 			return 0;
 		}
@@ -409,6 +433,7 @@ int apmond_ula_tick(int candidate)
 
 	if (add_address(&router_addr) != 0) {
 		backed_off = 1;
+		claim_delay_done = 0;
 		set_reason("backed off: failed to add %s", apmond.router_ula);
 		return 0;
 	}

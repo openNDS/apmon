@@ -107,6 +107,7 @@ int apmond_ula_init(const char *passphrase);
 int apmond_ula_tick(int candidate);
 int apmond_ula_holding_router(void);
 void apmond_ula_give_up_router(void);
+void apmond_ula_set_listen_ok(int ok);
 int apmond_ula_node_ready(void);
 
 /* vlan.c */
@@ -153,6 +154,8 @@ uint64_t apmond_sender_time(void);
 /* collector.c */
 int apmond_collector_start(void);
 int apmond_collector_running(void);
+int apmond_collector_probe(void);
+int apmond_collector_rebind_failed(void);
 int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const char *source,
 			     uint8_t **resp, size_t *resp_len);
 void apmond_ubus_init(void);

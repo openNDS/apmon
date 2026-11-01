@@ -182,12 +182,62 @@ static void choose_collector_address(void)
 	snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ula");
 }
 
+/* set while the collector listener cannot open: logged once at err, again only after recovery */
+static int listen_failed;
+
+static void listen_state(int ok)
+{
+	if (!ok && !listen_failed) {
+		listen_failed = 1;
+		LOG_ERR_("collector listener cannot open on port %d on %s, staying sender and not claiming %s",
+			 apmond.cfg.port, apmond.cfg.netdev, apmond.router_ula);
+	}
+	if (ok && listen_failed) {
+		listen_failed = 0;
+		LOG_NOTICE_("collector listener can open on %s again, %s may be claimed", apmond.cfg.netdev,
+			    apmond.router_ula);
+	}
+	apmond_ula_set_listen_ok(ok);
+}
+
+/* The listener failed while this node held ::1: give it up and stay sender until a probe succeeds */
+static void give_up_collector(void)
+{
+	listen_state(0);
+	apmond_ula_give_up_router();
+	apmond_collector_stop();
+}
+
 static void decide_role(void)
 {
 	enum apmond_role role;
+	int candidate;
 	int holding;
 
-	holding = apmond_ula_tick(collector_candidate());
+	candidate = collector_candidate();
+
+	/* r16 re-bind failed while holding ::1: same as a failed start */
+	if (apmond_collector_rebind_failed()) {
+		give_up_collector();
+	}
+
+	/* listen before claim (r26): probe the listener before every claim attempt */
+	if (candidate && !apmond_collector_running()) {
+		if (apmond_collector_probe() == 0) {
+			listen_state(1);
+		} else {
+			listen_state(0);
+		}
+	}
+
+	holding = apmond_ula_tick(candidate);
+
+	if (holding && !apmond_collector_running()) {
+		if (apmond_collector_start() != 0) {
+			give_up_collector();
+			holding = 0;
+		}
+	}
 
 	if (holding) {
 		role = ROLE_COLLECTOR;
@@ -206,18 +256,6 @@ static void decide_role(void)
 		}
 	}
 
-	if (role == ROLE_COLLECTOR && !apmond_collector_running()) {
-		if (apmond_collector_start() != 0) {
-			/* no listener: release ::1 so a peer can collect, and claim again after the back-off */
-			LOG_ERR_("collector listener failed to start, giving up %s and becoming a sender", apmond.router_ula);
-			apmond_ula_give_up_router();
-			role = ROLE_SENDER;
-			apmond.role = role;
-			apmond.time_synced = 0;
-			choose_collector_address();
-			LOG_NOTICE_("role: sender, collector %s port %d", apmond.collector_addr, apmond.cfg.port);
-		}
-	}
 	if (role != ROLE_COLLECTOR && apmond_collector_running()) {
 		apmond_collector_stop();
 	}

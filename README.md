@@ -126,7 +126,11 @@ the init script starts it one of two ways:
 port (2468) needs no capability, and `CAP_NET_RAW` is not used. The listener is bound to the LAN
 device with `SO_BINDTODEVICE` on a fresh socket, which an unprivileged process may do since
 Linux 5.7 (the kernel only requires `CAP_NET_RAW` to change an existing binding), so a jailed
-apmond needs kernel 5.7 or later (all 25.12 targets run 6.x). ubus access for user
+apmond needs kernel 5.7 or later (all 25.12 targets run 6.x). If user or group apmond is
+missing at start (eg `/etc/passwd` restored from an old backup), the init script recreates
+them (uid/gid 468, as the package does); if `id apmond` still fails, apmond is not started.
+A collector candidate checks that it can open the listener before it claims `::1`, and gives
+`::1` up if the listener fails later, so a node that cannot listen never holds `::1`. ubus access for user
 apmond is in `/usr/share/acl.d/apmond.json`: publish `apmond` and call `network.interface.*`
 status and `network.wireless` status (AP/mesh encryption and SSID as netifd applied them). Wi-Fi state comes straight from the kernel over nl80211 generic netlink (no iwinfo,
 rpcd-mod-iwinfo or libnl; dumps need no capability). The postinst reloads ubusd so the

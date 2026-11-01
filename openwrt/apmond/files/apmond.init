@@ -36,6 +36,19 @@ start_service() {
 		log_mountpoint=/tmp
 	fi
 
+	# self-heal (as the bind and knot packages do): recreate what USERID apmond=468:apmond=468 made
+	if ! type user_exists >/dev/null 2>&1; then
+		. /lib/functions.sh
+	fi
+	if ! group_exists apmond; then
+		group_add apmond 468
+		logger -t apmond -p daemon.notice "group apmond was missing, recreated with gid 468"
+	fi
+	if ! user_exists apmond; then
+		user_add apmond 468 468 apmond /var/run/apmond /bin/false
+		logger -t apmond -p daemon.notice "user apmond was missing, recreated with uid 468"
+	fi
+
 	# fail closed: never run the daemon as root without the jail or the -u switch
 	if ! id apmond >/dev/null 2>&1; then
 		logger -t apmond -p daemon.err "user apmond does not exist, not starting (reinstall the apmond package)"

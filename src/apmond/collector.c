@@ -598,7 +598,7 @@ static int open_listener(void)
 	 * needs kernel 5.7 or later; every 25.12 target runs 6.x. Each (re)bind uses a new socket.
 	 */
 	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, apmond.cfg.netdev, (socklen_t)strlen(apmond.cfg.netdev)) != 0) {
-		LOG_ERR_("cannot bind the listener to %s", apmond.cfg.netdev);
+		LOG_DEBUG_("cannot bind the listener to %s", apmond.cfg.netdev);
 		close(fd);
 		return -1;
 	}
@@ -613,6 +613,35 @@ static int open_listener(void)
 		return -1;
 	}
 	return fd;
+}
+
+/*
+ * Listen before claim (r26): can this node open the collector listener? The socket is bound
+ * to in6addr_any on netdev, not to ::1, so the probe works before ::1 is claimed. It is closed
+ * again at once rather than kept: an open libmicrohttpd on a node that does not hold ::1 would
+ * answer senders that fall back to IPv4 (the lan DHCP server) as if it were the collector.
+ * SO_REUSEADDR and no accepted connections mean the port is free again for the real start;
+ * if that start still fails, the caller gives ::1 up and waits for the next good probe.
+ */
+int apmond_collector_probe(void)
+{
+	int fd;
+
+	if (mhd != NULL) {
+		return 0;
+	}
+	fd = open_listener();
+	if (fd < 0) {
+		return -1;
+	}
+	close(fd);
+	return 0;
+}
+
+/* r16 re-bind after a device change failed: the caller gives ::1 up (r26) */
+int apmond_collector_rebind_failed(void)
+{
+	return rebind_pending;
 }
 
 int apmond_collector_running(void)
@@ -742,7 +771,7 @@ void apmond_collector_check_netdev(void)
 	if (start_listener() != 0) {
 		rebind_pending = 1;
 		listen_ifindex = 0;
-		LOG_ERR_("collector: could not re-bind the listener on %s, retrying next cycle", apmond.cfg.netdev);
+		LOG_ERR_("collector: could not re-bind the listener on %s, giving up the collector role", apmond.cfg.netdev);
 		return;
 	}
 	rebind_pending = 0;
