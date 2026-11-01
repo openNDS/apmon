@@ -227,6 +227,24 @@ static void store_client(struct node *n, struct blob_attr *table, uint64_t now_m
 	c->data = blob_memdup(table);
 }
 
+/*
+ * An authenticated message that is not a stored report (TIME_REQ, or a report rejected with 409)
+ * still used the sender's next seq: mark it used so it is not counted as lost (r27). Only a node
+ * that already has a stored report is touched: no node entry is created here.
+ */
+static void seq_used(const struct apmon_header *h)
+{
+	struct node *n;
+	char id[18];
+
+	apmon_mac_format(h->sender_id, id);
+	n = avl_find_element(&nodes, id, n, avl);
+	if (n == NULL || n->reports == 0) {
+		return;
+	}
+	apmon_seq_account(&n->last_seq, &n->lost, h->seq, 0);
+}
+
 static int store_report(const struct apmon_header *h, const char *json, const char *source, uint64_t now_ms)
 {
 	struct blob_buf b;
@@ -249,15 +267,11 @@ static int store_report(const struct apmon_header *h, const char *json, const ch
 		return -1;
 	}
 
-	if (n->reports > 0 && h->seq != n->last_seq + 1) {
-		uint32_t gap = h->seq - n->last_seq - 1;
-
-		/* a large gap means the sender restarted with a new random seq: not counted as lost */
-		if (gap < 1000) {
-			n->lost += gap;
-		}
+	if (n->reports > 0) {
+		apmon_seq_account(&n->last_seq, &n->lost, h->seq, 1);
+	} else {
+		n->last_seq = h->seq;
 	}
-	n->last_seq = h->seq;
 	n->reports++;
 	n->received_ms = now_ms;
 	n->lost_reported = 0;
@@ -377,6 +391,7 @@ int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const
 	if (res != APMON_OK) {
 		count_conflict++;
 		free(pt);
+		seq_used(&h);
 		snprintf(json, sizeof(json),
 			 "{\"v\":2,\"type\":\"error\",\"code\":\"%s\",\"collector_time\":%llu,\"echo_nonce\":\"%s\"}",
 			 res == APMON_ERR_TIME ? "time" : "replay", (unsigned long long)now, nonce_hex);
@@ -386,6 +401,7 @@ int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const
 
 	if (is_time) {
 		free(pt);
+		seq_used(&h);
 		snprintf(json, sizeof(json),
 			 "{\"v\":2,\"type\":\"time_resp\",\"collector_time\":%llu,\"echo_nonce\":\"%s\"}",
 			 (unsigned long long)now, nonce_hex);

@@ -395,6 +395,21 @@ int apmon_recheck_due(int *cycles, int every)
 	return 1;
 }
 
+void apmon_seq_account(uint32_t *last_seq, uint64_t *lost, uint32_t seq, int is_report)
+{
+	uint32_t step = seq - *last_seq;
+
+	if (step >= 1 && step <= 1000) {
+		*lost += step - 1;
+		*last_seq = seq;
+		return;
+	}
+	if (is_report) {
+		/* restart with a new random seq, or an older seq: start counting again from here */
+		*last_seq = seq;
+	}
+}
+
 int apmon_upstream_from_wan(int up, int has_default, int has_master, int bridge_ports, int wireless_ports)
 {
 	if (!up || !has_default) {

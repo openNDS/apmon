@@ -192,6 +192,14 @@ int apmon_route_is_default(const char *target, int mask);
  * 0 = never), and the counter starts again.
  */
 int apmon_recheck_due(int *cycles, int every);
+/*
+ * Lost-report accounting on the collector (r27). Every sealed message from a sender uses its
+ * next seq (reports and TIME_REQ alike). For an accepted report: count the gap since last_seq as
+ * lost (a gap of 1000 or more means the sender restarted with a new random seq) and set last_seq.
+ * For any other authenticated message (TIME_REQ, a report rejected with 409): its seq is used,
+ * not lost, so count the gap before it and move last_seq forward only, never backwards.
+ */
+void apmon_seq_account(uint32_t *last_seq, uint64_t *lost, uint32_t seq, int is_report);
 
 #define APMON_IFINDEX_SAME 0
 #define APMON_IFINDEX_REBIND 1

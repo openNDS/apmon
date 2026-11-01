@@ -126,7 +126,7 @@ Collector rules for every REPORT (after the GCM tag verifies — never before):
 1. **Window:** `|timestamp − collector_now| ≤ max_skew` (uci `max_age`, default **120 s**). Otherwise 409.
 2. **Nonce cache:** keep each accepted `(sender_id, nonce)` for `2 × max_skew`; a repeat is 409. Memory: one entry per accepted message, bounded by nodes × (240 s / interval).
 
-(1) and (2) together are sufficient against replay. `seq` is used only to count lost reports (shown in `ubus call apmond nodes`), never to reject a message, so a sender that restarts never gets locked out.
+(1) and (2) together are sufficient against replay. `seq` is used only to count lost reports (shown in `ubus call apmond nodes`), never to reject a message, so a sender that restarts never gets locked out. Every message uses the next `seq`, so the collector also moves a known sender's last `seq` forward (never back) on an accepted `TIME_REQ` and on an authenticated report rejected with 409 (r27): those numbers count as used, and only a message that never arrived counts as lost. A gap of 1000 or more is a sender restart and is not counted.
 
 **Routers often boot without RTC or NTP.** So senders never rely on their own wall clock:
 

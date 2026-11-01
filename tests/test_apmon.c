@@ -894,6 +894,54 @@ static void test_collector_role(void)
 	CHECK(apmon_recheck_due(&cycles, 0) == 0 && cycles == 0, "recheck: 0 = off");
 }
 
+/* ---------- r27 lost-report accounting ---------- */
+
+static void test_seq_account(void)
+{
+	uint32_t last;
+	uint64_t lost;
+
+	last = 100;
+	lost = 0;
+	apmon_seq_account(&last, &lost, 101, 1);
+	CHECK(lost == 0 && last == 101, "seq: next report, nothing lost");
+	apmon_seq_account(&last, &lost, 104, 1);
+	CHECK(lost == 2 && last == 104, "seq: report gap of 2 counts as lost");
+
+	last = 100;
+	lost = 0;
+	apmon_seq_account(&last, &lost, 101, 0);
+	apmon_seq_account(&last, &lost, 102, 1);
+	CHECK(lost == 0 && last == 102, "seq: accepted TIME_REQ is not lost");
+
+	last = 100;
+	lost = 0;
+	apmon_seq_account(&last, &lost, 101, 0);
+	apmon_seq_account(&last, &lost, 102, 0);
+	apmon_seq_account(&last, &lost, 103, 1);
+	CHECK(lost == 0 && last == 103, "seq: 409 resync (rejected report, TIME_REQ, resend) loses nothing");
+
+	last = 100;
+	lost = 0;
+	apmon_seq_account(&last, &lost, 102, 1);
+	CHECK(lost == 1 && last == 102, "seq: dropped TIME_REQ counts as 1");
+
+	last = 100;
+	lost = 0;
+	apmon_seq_account(&last, &lost, 99, 0);
+	CHECK(lost == 0 && last == 100, "seq: old TIME_REQ never moves last_seq back");
+
+	last = 100;
+	lost = 0;
+	apmon_seq_account(&last, &lost, 5000000, 1);
+	CHECK(lost == 0 && last == 5000000, "seq: restart with a new seq is not lost");
+
+	last = 0xffffffffu;
+	lost = 0;
+	apmon_seq_account(&last, &lost, 1, 1);
+	CHECK(lost == 1 && last == 1, "seq: wraps");
+}
+
 /* ---------- r19 nl80211 parsing ---------- */
 
 #include <linux/netlink.h>
@@ -1064,6 +1112,7 @@ int main(void)
 {
 	printf("crypto backend: %s\n", apmon_crypto_backend());
 	test_nl80211();
+	test_seq_account();
 	test_collector_role();
 	test_pick_htmode();
 	test_ifindex_action();
