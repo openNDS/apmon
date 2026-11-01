@@ -13,8 +13,6 @@
 #include <stdio.h>
 #include <string.h>
 
-#include <uci.h>
-
 #include "apmond.h"
 
 struct apmond apmond;
@@ -78,28 +76,51 @@ static void resolve_netdev(void)
 	LOG_NOTICE_("interface [ %s ] is on network device [ %s ]", apmond.cfg.interface, apmond.cfg.netdev);
 }
 
-/* uci network.wan.device, as 1.x "uci -q get network.wan.device" */
+/*
+ * The WAN device from netifd: ubus network.interface.wan status "device", else "l3_device".
+ * Not libuci: /etc/config/network is root only (0600) and apmond runs as user apmond.
+ * No WAN interface (a dumb AP) or no ubus: empty, and the chain skips that step.
+ */
 static void wan_device(char *out, size_t len)
 {
-	struct uci_context *ctx = uci_alloc_context();
-	struct uci_ptr ptr;
-	char spec[] = "network.wan.device";
+	enum {
+		WAN_DEVICE,
+		WAN_L3_DEVICE,
+		__WAN_MAX
+	};
+	static const struct blobmsg_policy policy[__WAN_MAX] = {
+		[WAN_DEVICE] = { .name = "device", .type = BLOBMSG_TYPE_STRING },
+		[WAN_L3_DEVICE] = { .name = "l3_device", .type = BLOBMSG_TYPE_STRING },
+	};
+	struct blob_attr *tb[__WAN_MAX];
+	struct blob_attr *reply = NULL;
+	struct ubus_context *ctx;
+	struct blob_buf b;
 
 	out[0] = '\0';
+	ctx = ubus_connect(NULL);
 	if (ctx == NULL) {
+		LOG_INFO_("no ubus, node id without the WAN device");
 		return;
 	}
-	if (uci_lookup_ptr(ctx, &ptr, spec, true) == UCI_OK) {
-		if ((ptr.flags & UCI_LOOKUP_COMPLETE) && ptr.o != NULL && ptr.o->type == UCI_TYPE_STRING) {
-			snprintf(out, len, "%s", ptr.o->v.string);
+	memset(&b, 0, sizeof(b));
+	blob_buf_init(&b, 0);
+	if (apmond_ubus_call(ctx, "network.interface.wan", "status", b.head, &reply) == 0) {
+		blobmsg_parse(policy, __WAN_MAX, tb, blob_data(reply), blob_len(reply));
+		if (tb[WAN_DEVICE] != NULL) {
+			snprintf(out, len, "%s", blobmsg_get_string(tb[WAN_DEVICE]));
+		} else if (tb[WAN_L3_DEVICE] != NULL) {
+			snprintf(out, len, "%s", blobmsg_get_string(tb[WAN_L3_DEVICE]));
 		}
 	}
-	uci_free_context(ctx);
+	free(reply);
+	blob_buf_free(&b);
+	ubus_free(ctx);
 }
 
 /*
- * Node id = factory (label) MAC, as apmond 1.x and mesh11sd (which identifies its peers by it).
- * Not the MAC of br-lan: mesh11sd rewrites that. Falls back to option device.
+ * Node id = factory (label) MAC, from the libapmon chain mesh11sd 8.0.0 shares
+ * (src/lib/factory_mac.c), so both agree on the id. No br-lan fallback: refuse to run.
  */
 static int read_node_id(void)
 {
@@ -107,8 +128,8 @@ static int read_node_id(void)
 	char source[96];
 
 	wan_device(wan, sizeof(wan));
-	if (apmon_factory_mac("", wan, apmond.cfg.device, apmond.id, source, sizeof(source)) != 0) {
-		LOG_ERR_("cannot determine the factory MAC address (no label MAC, no %s)", apmond.cfg.device);
+	if (apmon_factory_mac("", wan, apmond.id, source, sizeof(source)) != 0) {
+		LOG_ERR_("cannot determine the factory MAC address (no label MAC, no universally administered permanent ethernet MAC)");
 		return -1;
 	}
 	apmon_mac_format(apmond.id, apmond.id_str);

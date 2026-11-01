@@ -64,6 +64,21 @@ Example:
     === OpenWrt-f9d1  94:83:c4:2e:f9:d1  peer  ok  last report 3s ago
         ...
 
+## Node id
+
+A node is identified by its factory (label) MAC, `node_mac`. apmond takes it from the first of these that gives one, the same chain mesh11sd 8.0.0 will use from libapmon (`apmon_factory_mac()` in `src/lib/factory_mac.c`), so both always agree on a node's id:
+
+1. the device tree: `aliases/label-mac-device`, that node's `mac-address`, else `local-mac-address`
+2. `/etc/board.json` `system.label_macaddr`
+3. `uci system.@system[0].label_macaddr` (set this to override the id on an odd board)
+4. the permanent MAC of the WAN device (`ubus call network.interface.wan status`, `device`, else `l3_device`)
+5. the first of `eth1`, `eth0`, `lan0`, `lan1` with a universally administered permanent MAC
+6. the lowest-ifindex ethernet device with a universally administered permanent MAC
+
+A permanent MAC is what `ethtool -P` shows, else the current MAC when the kernel says it was never changed (`addr_assign_type` 0), so a MAC rewritten by mesh11sd is never used. All-zero MACs are ignored, and locally administered ones at steps 5 and 6. If nothing fits, apmond logs an error and does not start; there is no br-lan fallback. The source used is logged at start: `node id ... (factory MAC from ...)`.
+
+Upgrading from r28 or older: on boards where the old chain fell back to an interface MAC, the id can change, so the node shows up once as a new node (forget the old one with `apmond forget <old node_mac>`). Example: the GL-BE10000 on snapshot, where r28 used eth1 as rewritten by mesh11sd (`96:83:c4:e7:b1:b1`) and r29 reads the device tree label MAC (`94:83:c4:dd:b1:b1`).
+
 ## Field names
 
 Nodes are identified by `node_mac` and clients by `client_mac`, the first field of every client object. Clients nested under a node in `apmond nodes` / `node` are just `client_mac`, `kind`, `state`, `last_seen`, `last_seen_date`, `last_seen_age_s`, location (Wi-Fi `ap_ssid`, `ap_ifname`, `ap_bssid`; wired `bridge`/`port`), `vlan`, `vxlan`, then their stats (`-t` shows a Wi-Fi client's SSID under WHERE); the flat `apmond clients` list adds `node_mac` and `node_hostname` after `client_mac`.

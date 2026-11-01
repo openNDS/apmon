@@ -77,7 +77,11 @@ start_service() {
 		procd_add_jail_mount /usr/sbin
 		# wired speed fallback: popen("swconfig ...") needs a shell
 		procd_add_jail_mount /bin/sh /sbin/swconfig
-		# node id: the factory MAC from board.json label_macaddr (device tree is under /sys)
+		# node id: the factory MAC from the device tree label-mac-device, then board.json
+		# label_macaddr; newer ujail masks /sys/firmware, so mount the device tree read only
+		if [ -d /sys/firmware/devicetree ]; then
+			procd_add_jail_mount /sys/firmware/devicetree
+		fi
 		if [ -f /etc/board.json ]; then
 			procd_add_jail_mount /etc/board.json
 		fi

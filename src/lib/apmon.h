@@ -206,9 +206,15 @@ void apmon_seq_account(uint32_t *last_seq, uint64_t *lost, uint32_t seq, int is_
 #define APMON_IFINDEX_GONE 2
 int apmon_ifindex_action(int bound, int now);
 
-/* factory (label) MAC, the node id, in apmond 1.x get_factory_mac order; root "" = this system */
-int apmon_factory_mac(const char *root, const char *wan_device, const char *fallback_device,
+/*
+ * factory (label) MAC, the node id, shared with mesh11sd 8.0.0 (chain in factory_mac.c).
+ * root "" = this system; wan_device NULL or "" skips the WAN step. -1 = no usable MAC: refuse to run.
+ */
+int apmon_factory_mac(const char *root, const char *wan_device,
 		      uint8_t out[APMON_ID_LEN], char *source, size_t source_len);
+/* permanent MAC by ETHTOOL_GPERMADDR; apmon_permaddr_fn is replaceable for tests (NULL = sysfs only) */
+int apmon_ethtool_permaddr(const char *dev, uint8_t out[APMON_ID_LEN]);
+extern int (*apmon_permaddr_fn)(const char *dev, uint8_t out[APMON_ID_LEN]);
 int apmon_block_name_valid(const char *name);
 void apmon_format_age(int64_t seconds, char *out, size_t out_len);
 /* Node display order (1.x show_ap_data): the collector first, then hostname, then id */
