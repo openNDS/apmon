@@ -8,12 +8,13 @@ include $(TOPDIR)/rules.mk
 
 PKG_NAME:=apmond
 PKG_VERSION:=2.0.0_beta
-PKG_RELEASE:=27
+PKG_RELEASE:=28
 
 PKG_SOURCE:=apmon-$(PKG_VERSION).tar.gz
 PKG_SOURCE_URL:=https://codeload.github.com/openNDS/apmon/tar.gz/v$(PKG_VERSION)?
 PKG_HASH:=skip
-PKG_BUILD_DIR:=$(BUILD_DIR)/apmon-$(PKG_VERSION)
+# One tree per variant, as package.mk does by default: the tarball unpacks into $(PKG_BUILD_DIR)/..
+PKG_BUILD_DIR:=$(BUILD_DIR)/apmon-$(BUILD_VARIANT)/apmon-$(PKG_VERSION)
 
 PKG_MAINTAINER:=Rob White <rob@blue-wave.net>
 PKG_LICENSE:=GPL-2.0-only
