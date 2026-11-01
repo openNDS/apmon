@@ -145,7 +145,8 @@ static void addr_text(const struct in6_addr *addr, char *out, size_t len)
 	inet_ntop(AF_INET6, addr, out, (socklen_t)len);
 }
 
-static int add_address(const struct in6_addr *addr)
+/* quiet = routine DAD re-check: log at debug level, not notice */
+static int add_address_q(const struct in6_addr *addr, int quiet)
 {
 	char text[INET6_ADDRSTRLEN];
 	int ifindex = (int)if_nametoindex(apmond.cfg.netdev);
@@ -162,11 +163,20 @@ static int add_address(const struct in6_addr *addr)
 		LOG_ERR_("failed to add ULA address %s/64 to %s", text, apmond.cfg.netdev);
 		return -1;
 	}
-	LOG_NOTICE_("ULA address %s/64 added to %s", text, apmond.cfg.netdev);
+	if (quiet) {
+		LOG_DEBUG_("ULA address %s/64 re-added to %s for the DAD re-check", text, apmond.cfg.netdev);
+	} else {
+		LOG_NOTICE_("ULA address %s/64 added to %s", text, apmond.cfg.netdev);
+	}
 	return 0;
 }
 
-static void del_address(const struct in6_addr *addr)
+static int add_address(const struct in6_addr *addr)
+{
+	return add_address_q(addr, 0);
+}
+
+static void del_address_q(const struct in6_addr *addr, int quiet)
 {
 	char text[INET6_ADDRSTRLEN];
 	int ifindex = (int)if_nametoindex(apmond.cfg.netdev);
@@ -176,8 +186,17 @@ static void del_address(const struct in6_addr *addr)
 	}
 	addr_text(addr, text, sizeof(text));
 	if (addr_change(0, addr, ifindex) == 0) {
-		LOG_NOTICE_("ULA address %s/64 deleted from %s", text, apmond.cfg.netdev);
+		if (quiet) {
+			LOG_DEBUG_("ULA address %s/64 deleted from %s for the DAD re-check", text, apmond.cfg.netdev);
+		} else {
+			LOG_NOTICE_("ULA address %s/64 deleted from %s", text, apmond.cfg.netdev);
+		}
 	}
+}
+
+static void del_address(const struct in6_addr *addr)
+{
+	del_address_q(addr, 0);
 }
 
 /* Is another collector answering on <ula>::1? (1.x pinged it; a TCP connect to our port says the same) */
@@ -270,14 +289,18 @@ static int drop_router(const char *fmt)
  * the real collector was away and kept it when it came back (DAD only runs when an address is
  * added). So the holder deletes and adds ::1 again every collector_recheck cycles: if another
  * node holds it, DAD fails here and this node backs off. Returns 1 if this node still holds it.
+ * The routine delete/add is logged at debug level; a conflict is logged at notice by drop_router().
+ * Linux only runs DAD when an address is added (an NLM_F_REPLACE update of an existing address
+ * does not restart it), so the delete cannot be avoided without raw NS probes (CAP_NET_RAW).
  */
 static int dad_recheck(void)
 {
 	int flags;
 	int i;
 
-	del_address(&router_addr);
-	if (add_address(&router_addr) != 0) {
+	LOG_DEBUG_("DAD re-check of %s", apmond.router_ula);
+	del_address_q(&router_addr, 1);
+	if (add_address_q(&router_addr, 1) != 0) {
 		return 0;
 	}
 	for (i = 0; i < 3; i++) {
