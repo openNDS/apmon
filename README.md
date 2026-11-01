@@ -123,7 +123,10 @@ the init script starts it one of two ways:
   effective, ambient) with no_new_privs, as dnsmasq does.
 
 `CAP_NET_ADMIN` is needed to add and remove the ULA addresses over netlink; the collector
-port (2468) needs no capability, and `CAP_NET_RAW` is not used. ubus access for user
+port (2468) needs no capability, and `CAP_NET_RAW` is not used. The listener is bound to the LAN
+device with `SO_BINDTODEVICE` on a fresh socket, which an unprivileged process may do since
+Linux 5.7 (the kernel only requires `CAP_NET_RAW` to change an existing binding), so a jailed
+apmond needs kernel 5.7 or later (all 25.12 targets run 6.x). ubus access for user
 apmond is in `/usr/share/acl.d/apmond.json`: publish `apmond` and call `network.interface.*`
 status and `network.wireless` status (AP/mesh encryption and SSID as netifd applied them). Wi-Fi state comes straight from the kernel over nl80211 generic netlink (no iwinfo,
 rpcd-mod-iwinfo or libnl; dumps need no capability). The postinst reloads ubusd so the

@@ -207,7 +207,16 @@ static void decide_role(void)
 	}
 
 	if (role == ROLE_COLLECTOR && !apmond_collector_running()) {
-		apmond_collector_start();
+		if (apmond_collector_start() != 0) {
+			/* no listener: release ::1 so a peer can collect, and claim again after the back-off */
+			LOG_ERR_("collector listener failed to start, giving up %s and becoming a sender", apmond.router_ula);
+			apmond_ula_give_up_router();
+			role = ROLE_SENDER;
+			apmond.role = role;
+			apmond.time_synced = 0;
+			choose_collector_address();
+			LOG_NOTICE_("role: sender, collector %s port %d", apmond.collector_addr, apmond.cfg.port);
+		}
 	}
 	if (role != ROLE_COLLECTOR && apmond_collector_running()) {
 		apmond_collector_stop();

@@ -36,49 +36,53 @@ start_service() {
 		log_mountpoint=/tmp
 	fi
 
+	# fail closed: never run the daemon as root without the jail or the -u switch
+	if ! id apmond >/dev/null 2>&1; then
+		logger -t apmond -p daemon.err "user apmond does not exist, not starting (reinstall the apmond package)"
+		return 1
+	fi
+
 	procd_open_instance
 	procd_set_param command "$PROG" run
 	procd_set_param respawn 3600 5 5
 	procd_set_param stdout 1
 	procd_set_param stderr 1
 
-	if id apmond >/dev/null 2>&1; then
-		# the daemon reads its config through group apmond; uci commit keeps the mode, not the group
-		chgrp apmond "$CONFIG"
-		chmod 0640 "$CONFIG"
-		prepare_log_dir /tmp/apmond
-		if [ "$log_mountpoint" != "/tmp" ] && [ -d "$log_mountpoint" ]; then
-			prepare_log_dir "$log_mountpoint/apmond"
-		fi
+	# the daemon reads its config through group apmond; uci commit keeps the mode, not the group
+	chgrp apmond "$CONFIG"
+	chmod 0640 "$CONFIG"
+	prepare_log_dir /tmp/apmond
+	if [ "$log_mountpoint" != "/tmp" ] && [ -d "$log_mountpoint" ]; then
+		prepare_log_dir "$log_mountpoint/apmond"
+	fi
 
-		if jail_available; then
-			# ujail as user apmond with CAP_NET_ADMIN only (ULA addresses over netlink), like sysntpd
-			procd_add_jail apmond log ubus procfs sysfs
-			procd_add_jail_mount /etc/config /etc/openwrt_release /tmp/sysinfo
-			# /usr/sbin, not just the binary: installed_sha256 must see a replaced file
-			procd_add_jail_mount /usr/sbin
-			# wired speed fallback: popen("swconfig ...") needs a shell
-			procd_add_jail_mount /bin/sh /sbin/swconfig
-			# node id: the factory MAC from board.json label_macaddr (device tree is under /sys)
-			if [ -f /etc/board.json ]; then
-				procd_add_jail_mount /etc/board.json
-			fi
-			if [ -d /overlay ]; then
-				procd_add_jail_mount /overlay
-			fi
-			procd_add_jail_mount_rw /tmp/apmond
-			if [ "$log_mountpoint" != "/tmp" ] && [ -d "$log_mountpoint" ]; then
-				procd_add_jail_mount_rw "$log_mountpoint"
-			fi
-			procd_set_param capabilities /etc/capabilities/apmond.json
-			procd_set_param user apmond
-			procd_set_param group apmond
-			procd_set_param no_new_privs 1
-		else
-			# no ujail or no PID/IPC/UTS namespaces: apmond switches to user apmond itself,
-			# keeping CAP_NET_ADMIN only
-			procd_append_param command -u apmond
+	if jail_available; then
+		# ujail as user apmond with CAP_NET_ADMIN only (ULA addresses over netlink), like sysntpd
+		procd_add_jail apmond log ubus procfs sysfs
+		procd_add_jail_mount /etc/config /etc/openwrt_release /tmp/sysinfo
+		# /usr/sbin, not just the binary: installed_sha256 must see a replaced file
+		procd_add_jail_mount /usr/sbin
+		# wired speed fallback: popen("swconfig ...") needs a shell
+		procd_add_jail_mount /bin/sh /sbin/swconfig
+		# node id: the factory MAC from board.json label_macaddr (device tree is under /sys)
+		if [ -f /etc/board.json ]; then
+			procd_add_jail_mount /etc/board.json
 		fi
+		if [ -d /overlay ]; then
+			procd_add_jail_mount /overlay
+		fi
+		procd_add_jail_mount_rw /tmp/apmond
+		if [ "$log_mountpoint" != "/tmp" ] && [ -d "$log_mountpoint" ]; then
+			procd_add_jail_mount_rw "$log_mountpoint"
+		fi
+		procd_set_param capabilities /etc/capabilities/apmond.json
+		procd_set_param user apmond
+		procd_set_param group apmond
+		procd_set_param no_new_privs 1
+	else
+		# no ujail or no PID/IPC/UTS namespaces: apmond switches to user apmond itself,
+		# keeping CAP_NET_ADMIN only
+		procd_append_param command -u apmond
 	fi
 	procd_close_instance
 }

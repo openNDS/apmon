@@ -592,6 +592,11 @@ static int open_listener(void)
 	}
 	setsockopt(fd, IPPROTO_IPV6, IPV6_V6ONLY, &off, sizeof(off));
 	setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+	/*
+	 * SO_BINDTODEVICE on a fresh, unbound socket needs no capability since Linux 5.7 (the
+	 * kernel only asks for CAP_NET_RAW to change an existing binding), so the jailed daemon
+	 * needs kernel 5.7 or later; every 25.12 target runs 6.x. Each (re)bind uses a new socket.
+	 */
 	if (setsockopt(fd, SOL_SOCKET, SO_BINDTODEVICE, apmond.cfg.netdev, (socklen_t)strlen(apmond.cfg.netdev)) != 0) {
 		LOG_ERR_("cannot bind the listener to %s", apmond.cfg.netdev);
 		close(fd);

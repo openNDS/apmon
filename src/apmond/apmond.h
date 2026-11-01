@@ -106,6 +106,7 @@ int apmond_read_log(int follow);
 int apmond_ula_init(const char *passphrase);
 int apmond_ula_tick(int candidate);
 int apmond_ula_holding_router(void);
+void apmond_ula_give_up_router(void);
 int apmond_ula_node_ready(void);
 
 /* vlan.c */

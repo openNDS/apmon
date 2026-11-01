@@ -285,6 +285,20 @@ static int drop_router(const char *fmt)
 }
 
 /*
+ * The collector listener could not start (r25): holding ::1 without a listener makes peers
+ * see ECONNREFUSED, which router_answers() treats as in use, so nobody would collect.
+ * Give up ::1 through the DAD-conflict path: backed_off makes the next claim wait
+ * router_takeover_misses silent checks, so a listener that keeps failing cannot flap every cycle.
+ */
+void apmond_ula_give_up_router(void)
+{
+	if (!have_prefix) {
+		return;
+	}
+	drop_router("backed off: collector listener failed to start, %s given up");
+}
+
+/*
  * Two collectors can both hold ::1: claims at the same moment, or a node that took over while
  * the real collector was away and kept it when it came back (DAD only runs when an address is
  * added). So the holder deletes and adds ::1 again every collector_recheck cycles: if another
