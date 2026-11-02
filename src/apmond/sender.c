@@ -156,14 +156,14 @@ static const char *collector_name(void)
 /* r32: when the wait for our own ULA began (0: not waiting) */
 static uint64_t ula_wait_start_ms;
 
-static void use_ipv4_gateway(void)
-{
-	char ifname[32];
-	char gateway[64];
+/* r34: set by decide_role: this node has an upstream on its WAN (a portal candidate) */
+static int portal_candidate;
 
-	if (apmond_lan_gateway(apmond.ubus, gateway, sizeof(gateway)) == 0 ||
-	    apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) == 0) {
-		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", gateway);
+/* r34: the lan side IPv4 gateway only, never the WAN default route */
+static void use_ipv4_gateway(const char *lan_gateway)
+{
+	if (lan_gateway[0] != '\0') {
+		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", lan_gateway);
 		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ipv4");
 		return;
 	}
@@ -176,10 +176,12 @@ static void use_ipv4_gateway(void)
 static int choose_collector_address(void)
 {
 	enum apmon_collector_pick pick;
+	char lan_gateway[64] = "";
 	uint64_t now = apmon_monotonic_ms();
 	uint64_t waited = 0;
 	int have_ula = apmond.router_ula[0] != '\0';
 	int ready = apmond_ula_node_ready();
+	int have_lan_gateway;
 
 	if (apmond.cfg.collector[0] != '\0') {
 		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.cfg.collector);
@@ -187,25 +189,43 @@ static int choose_collector_address(void)
 		return 0;
 	}
 
+	if (apmond_lan_gateway(apmond.ubus, lan_gateway, sizeof(lan_gateway)) != 0) {
+		lan_gateway[0] = '\0';
+	}
+	have_lan_gateway = lan_gateway[0] != '\0';
+	if (portal_candidate) {
+		apmond.ipv4_fallback = 0;
+	}
+
 	if (ula_wait_start_ms != 0) {
 		waited = now - ula_wait_start_ms;
 	}
-	pick = apmon_collector_pick(have_ula, ready, apmond.ipv4_fallback, waited);
+	pick = apmon_collector_pick(have_ula, ready, apmond.ipv4_fallback, waited, portal_candidate,
+				    have_lan_gateway);
 
 	if (pick == APMON_PICK_WAIT) {
 		if (ula_wait_start_ms == 0) {
 			ula_wait_start_ms = now;
-			LOG_NOTICE_("waiting up to %d s for node ULA %s to finish DAD before choosing the collector",
-				    APMON_ULA_WAIT_MS / 1000, apmond.node_ula);
+			if (portal_candidate) {
+				LOG_NOTICE_("portal candidate: waiting for node ULA %s to finish DAD (no IPv4 fallback)",
+					    apmond.node_ula);
+			} else {
+				LOG_NOTICE_("waiting up to %d s for node ULA %s to finish DAD before choosing the collector",
+					    APMON_ULA_WAIT_MS / 1000, apmond.node_ula);
+			}
 		}
 		return 1;
 	}
 
 	if (ula_wait_start_ms != 0) {
-		if (pick == APMON_PICK_ULA) {
+		if (pick == APMON_PICK_ULA && ready) {
 			LOG_NOTICE_("node ULA ready after %llu ms", (unsigned long long)waited);
+		} else if (pick == APMON_PICK_ULA) {
+			LOG_NOTICE_("node ULA not ready after %d s and no lan IPv4 gateway, using the collector ULA",
+				    APMON_ULA_WAIT_MS / 1000);
 		} else {
-			LOG_NOTICE_("node ULA not ready after %d s, using the IPv4 gateway", APMON_ULA_WAIT_MS / 1000);
+			LOG_NOTICE_("node ULA not ready after %d s, using the lan IPv4 gateway %s",
+				    APMON_ULA_WAIT_MS / 1000, lan_gateway);
 			/* do not wait again every cycle: retry the ULA after 10 IPv4 reports, as after a failure */
 			apmond.ipv4_fallback = 1;
 		}
@@ -218,7 +238,7 @@ static int choose_collector_address(void)
 		return 0;
 	}
 
-	use_ipv4_gateway();
+	use_ipv4_gateway(lan_gateway);
 	return 0;
 }
 
@@ -274,6 +294,7 @@ static void decide_role(void)
 	int holding;
 
 	candidate = collector_candidate();
+	portal_candidate = candidate;
 
 	/* r16 re-bind failed while holding ::1: same as a failed start */
 	if (apmond_collector_rebind_failed()) {
@@ -374,7 +395,9 @@ static int exchange(uint8_t type, const char *plaintext, char **reply)
 		LOG_INFO_("collector %s port %d not reachable", apmond.collector_addr, apmond.cfg.port);
 		status = 0;
 		/* r32: only a failed ULA send moves to IPv4; a failed IPv4 send goes back to the ULA */
-		apmond.ipv4_fallback = apmon_fallback_after_failure(strcmp(apmond.collector_via, "ula") == 0);
+		/* r34: never for a portal candidate */
+		apmond.ipv4_fallback = apmon_fallback_after_failure(strcmp(apmond.collector_via, "ula") == 0,
+								    portal_candidate);
 	}
 	free(msg);
 

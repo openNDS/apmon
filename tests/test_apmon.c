@@ -949,17 +949,38 @@ static void test_sender_summary(void)
 	CHECK(last == 31000, "rate limit: last time updated");
 }
 
-/* r32: collector address choice and fallback */
+/* r32, r34: collector address choice and fallback */
 static void test_collector_pick(void)
 {
-	CHECK(apmon_collector_pick(1, 1, 0, 0) == APMON_PICK_ULA, "collector pick: ready ULA");
-	CHECK(apmon_collector_pick(1, 0, 0, 0) == APMON_PICK_WAIT, "collector pick: ULA in DAD, wait");
-	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS - 1) == APMON_PICK_WAIT, "collector pick: still waiting");
-	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS) == APMON_PICK_IPV4, "collector pick: wait over, IPv4");
-	CHECK(apmon_collector_pick(1, 1, 1, 0) == APMON_PICK_IPV4, "collector pick: fallback uses IPv4");
-	CHECK(apmon_collector_pick(0, 0, 0, 0) == APMON_PICK_IPV4, "collector pick: no ULA, IPv4");
-	CHECK(apmon_fallback_after_failure(1) == 1, "fallback: failed ULA send moves to IPv4");
-	CHECK(apmon_fallback_after_failure(0) == 0, "fallback: failed IPv4 send goes back to the ULA");
+	/* sender with a lan IPv4 gateway */
+	CHECK(apmon_collector_pick(1, 1, 0, 0, 0, 1) == APMON_PICK_ULA, "collector pick: ready ULA");
+	CHECK(apmon_collector_pick(1, 0, 0, 0, 0, 1) == APMON_PICK_WAIT, "collector pick: ULA in DAD, wait");
+	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS - 1, 0, 1) == APMON_PICK_WAIT,
+	      "collector pick: still waiting");
+	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS, 0, 1) == APMON_PICK_IPV4,
+	      "collector pick: wait over, lan IPv4");
+	CHECK(apmon_collector_pick(1, 1, 1, 0, 0, 1) == APMON_PICK_IPV4, "collector pick: fallback uses lan IPv4");
+	CHECK(apmon_collector_pick(0, 0, 0, 0, 0, 1) == APMON_PICK_IPV4, "collector pick: no ULA, IPv4");
+	/* r34: no lan IPv4 gateway: never IPv4 via the WAN, keep the ULA */
+	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS, 0, 0) == APMON_PICK_ULA,
+	      "collector pick: wait over, no lan gateway, ULA");
+	CHECK(apmon_collector_pick(1, 1, 1, 0, 0, 0) == APMON_PICK_ULA,
+	      "collector pick: fallback without lan gateway stays on ULA");
+	CHECK(apmon_collector_pick(1, 0, 0, 0, 0, 0) == APMON_PICK_WAIT,
+	      "collector pick: no lan gateway, ULA in DAD, wait");
+	/* r34: portal candidate (upstream on its WAN) never uses IPv4 */
+	CHECK(apmon_collector_pick(1, 1, 0, 0, 1, 1) == APMON_PICK_ULA, "collector pick: portal, ready ULA");
+	CHECK(apmon_collector_pick(1, 0, 0, 0, 1, 1) == APMON_PICK_WAIT, "collector pick: portal, ULA in DAD, wait");
+	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS, 1, 1) == APMON_PICK_WAIT,
+	      "collector pick: portal keeps waiting after the wait");
+	CHECK(apmon_collector_pick(1, 0, 0, 10 * APMON_ULA_WAIT_MS, 1, 0) == APMON_PICK_WAIT,
+	      "collector pick: portal without lan gateway keeps waiting");
+	CHECK(apmon_collector_pick(1, 1, 1, 0, 1, 1) == APMON_PICK_ULA,
+	      "collector pick: portal ignores the IPv4 fallback");
+	CHECK(apmon_fallback_after_failure(1, 0) == 1, "fallback: failed ULA send moves to IPv4");
+	CHECK(apmon_fallback_after_failure(0, 0) == 0, "fallback: failed IPv4 send goes back to the ULA");
+	CHECK(apmon_fallback_after_failure(1, 1) == 0, "fallback: portal failed ULA send stays on the ULA");
+	CHECK(apmon_fallback_after_failure(0, 1) == 0, "fallback: portal never moves to IPv4");
 }
 
 static void test_ifindex_action(void)

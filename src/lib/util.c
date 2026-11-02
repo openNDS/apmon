@@ -135,11 +135,20 @@ int apmon_rate_limit_due(uint64_t now_ms, uint64_t *last_ms, uint64_t interval_m
 	return 1;
 }
 
-/* r32: which collector address a sender uses now (see apmon.h) */
+/* r32, r34: which collector address a sender uses now (see apmon.h) */
 enum apmon_collector_pick apmon_collector_pick(int have_ula, int ula_ready, int ipv4_fallback,
-					       uint64_t waited_ms)
+					       uint64_t waited_ms, int portal, int have_lan_gateway)
 {
-	if (ipv4_fallback) {
+	if (portal) {
+		if (!have_ula) {
+			return APMON_PICK_IPV4;
+		}
+		if (ula_ready) {
+			return APMON_PICK_ULA;
+		}
+		return APMON_PICK_WAIT;
+	}
+	if (ipv4_fallback && have_lan_gateway) {
 		return APMON_PICK_IPV4;
 	}
 	if (!have_ula) {
@@ -151,15 +160,22 @@ enum apmon_collector_pick apmon_collector_pick(int have_ula, int ula_ready, int 
 	if (waited_ms < APMON_ULA_WAIT_MS) {
 		return APMON_PICK_WAIT;
 	}
-	return APMON_PICK_IPV4;
+	if (have_lan_gateway) {
+		return APMON_PICK_IPV4;
+	}
+	return APMON_PICK_ULA;
 }
 
 /*
  * r32: a failed ULA send falls back to IPv4. A failed IPv4 send (in fallback, or because
  * the ULA was not ready in time) goes back to the ULA, never forcing a second IPv4 try.
+ * r34: a portal candidate never falls back to IPv4.
  */
-int apmon_fallback_after_failure(int failed_was_ula)
+int apmon_fallback_after_failure(int failed_was_ula, int portal)
 {
+	if (portal) {
+		return 0;
+	}
 	if (failed_was_ula) {
 		return 1;
 	}
