@@ -46,6 +46,8 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
     apmond bench                         key derivation time on this hardware
     apmond run [-c confdir]              the daemon itself (started by /etc/init.d/apmond)
 
+On a sender, `apmond status` always ends with `reports sent N  failed N  last HTTP status N` (zeros included) and a reminder that lost reports are counted on the collector (`apmond node <id>`, `lost_reports`). With `-t` the line is on stdout; in JSON mode it is on stderr, so the JSON on stdout stays parseable (r31).
+
 Example:
 
     # apmond -t nodes

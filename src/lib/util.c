@@ -87,3 +87,11 @@ int apmon_mac_parse(const char *s, uint8_t id[APMON_ID_LEN])
 	}
 	return 0;
 }
+
+/* r31: the sender line of "apmond status", always printed, zeros included */
+void apmon_sender_summary(uint64_t sent, uint64_t failed, uint32_t last_status, char *out, size_t len)
+{
+	snprintf(out, len, "reports sent %llu  failed %llu  last HTTP status %u\n"
+		 "lost reports are counted on the collector: apmond node <id>",
+		 (unsigned long long)sent, (unsigned long long)failed, (unsigned int)last_status);
+}

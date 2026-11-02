@@ -1080,6 +1080,43 @@ static int daemon_pid(void)
 }
 
 /* apmond status: the ubus status plus "pid", the daemon's host pid (null if unknown) */
+/*
+ * r31: a sender always shows its report counters, zeros included, and where lost
+ * reports are counted. On stdout with -t; on stderr after the JSON, so that
+ * "apmond status" piped to a JSON parser still gets valid JSON.
+ */
+static void print_sender_summary(struct blob_attr *status)
+{
+	struct blob_attr *sent = field(status, "reports_sent");
+	struct blob_attr *failed = field(status, "reports_failed");
+	struct blob_attr *last = field(status, "last_status");
+	char role[32];
+	char line[200];
+	uint64_t n_sent = 0;
+	uint64_t n_failed = 0;
+	uint32_t n_last = 0;
+	FILE *out = stderr;
+
+	text_of(status, "role", role, sizeof(role));
+	if (strcmp(role, "sender") != 0) {
+		return;
+	}
+	if (sent != NULL) {
+		n_sent = blobmsg_get_u64(sent);
+	}
+	if (failed != NULL) {
+		n_failed = blobmsg_get_u64(failed);
+	}
+	if (last != NULL) {
+		n_last = blobmsg_get_u32(last);
+	}
+	apmon_sender_summary(n_sent, n_failed, n_last, line, sizeof(line));
+	if (table_mode) {
+		out = stdout;
+	}
+	fprintf(out, "%s\n", line);
+}
+
 static int show_status(void)
 {
 	struct blob_attr *msg;
@@ -1122,6 +1159,7 @@ static int show_status(void)
 		print_table(&t);
 		apmon_table_free(&t);
 	}
+	print_sender_summary(b.head);
 	blob_buf_free(&b);
 	return 0;
 }

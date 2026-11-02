@@ -910,6 +910,18 @@ static void test_factory_mac(void)
 }
 
 /* r16 collector listener: re-bind when the device is recreated */
+/* r31: sender status line, zeros included */
+static void test_sender_summary(void)
+{
+	char line[200];
+
+	apmon_sender_summary(0, 0, 0, line, sizeof(line));
+	CHECK(strncmp(line, "reports sent 0  failed 0  last HTTP status 0\n", 45) == 0, "sender summary: zeros shown");
+	CHECK(strstr(line, "apmond node <id>") != NULL, "sender summary: points to the collector for lost");
+	apmon_sender_summary(1057, 3, 200, line, sizeof(line));
+	CHECK(strncmp(line, "reports sent 1057  failed 3  last HTTP status 200\n", 50) == 0, "sender summary: counts");
+}
+
 static void test_ifindex_action(void)
 {
 	CHECK(apmon_ifindex_action(75, 75) == APMON_IFINDEX_SAME, "ifindex: same device, keep the listener");
@@ -1206,6 +1218,7 @@ int main(void)
 	test_round_trip_and_replay();
 	test_json();
 	test_extra();
+	test_sender_summary();
 
 	printf("\n%d passed, %d failed\n", passes, failures);
 	if (failures > 0) {

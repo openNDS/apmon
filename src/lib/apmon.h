@@ -119,6 +119,7 @@ uint64_t apmon_monotonic_ms(void);
 void apmon_hex_encode(const uint8_t *in, size_t len, char *out);
 int apmon_hex_decode(const char *in, uint8_t *out, size_t out_len);
 void apmon_mac_format(const uint8_t id[APMON_ID_LEN], char out[18]);
+void apmon_sender_summary(uint64_t sent, uint64_t failed, uint32_t last_status, char *out, size_t len);
 int apmon_mac_parse(const char *s, uint8_t id[APMON_ID_LEN]);
 
 /* json.c - small JSON writer for building payloads */
