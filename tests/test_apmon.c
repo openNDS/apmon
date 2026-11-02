@@ -922,6 +922,19 @@ static void test_sender_summary(void)
 	CHECK(strncmp(line, "reports sent 1057  failed 3  last HTTP status 200\n", 50) == 0, "sender summary: counts");
 }
 
+/* r32: collector address choice and fallback */
+static void test_collector_pick(void)
+{
+	CHECK(apmon_collector_pick(1, 1, 0, 0) == APMON_PICK_ULA, "collector pick: ready ULA");
+	CHECK(apmon_collector_pick(1, 0, 0, 0) == APMON_PICK_WAIT, "collector pick: ULA in DAD, wait");
+	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS - 1) == APMON_PICK_WAIT, "collector pick: still waiting");
+	CHECK(apmon_collector_pick(1, 0, 0, APMON_ULA_WAIT_MS) == APMON_PICK_IPV4, "collector pick: wait over, IPv4");
+	CHECK(apmon_collector_pick(1, 1, 1, 0) == APMON_PICK_IPV4, "collector pick: fallback uses IPv4");
+	CHECK(apmon_collector_pick(0, 0, 0, 0) == APMON_PICK_IPV4, "collector pick: no ULA, IPv4");
+	CHECK(apmon_fallback_after_failure(1) == 1, "fallback: failed ULA send moves to IPv4");
+	CHECK(apmon_fallback_after_failure(0) == 0, "fallback: failed IPv4 send goes back to the ULA");
+}
+
 static void test_ifindex_action(void)
 {
 	CHECK(apmon_ifindex_action(75, 75) == APMON_IFINDEX_SAME, "ifindex: same device, keep the listener");
@@ -1219,6 +1232,7 @@ int main(void)
 	test_json();
 	test_extra();
 	test_sender_summary();
+	test_collector_pick();
 
 	printf("\n%d passed, %d failed\n", passes, failures);
 	if (failures > 0) {

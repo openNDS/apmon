@@ -95,3 +95,34 @@ void apmon_sender_summary(uint64_t sent, uint64_t failed, uint32_t last_status, 
 		 "lost reports are counted on the collector: apmond node <id>",
 		 (unsigned long long)sent, (unsigned long long)failed, (unsigned int)last_status);
 }
+
+/* r32: which collector address a sender uses now (see apmon.h) */
+enum apmon_collector_pick apmon_collector_pick(int have_ula, int ula_ready, int ipv4_fallback,
+					       uint64_t waited_ms)
+{
+	if (ipv4_fallback) {
+		return APMON_PICK_IPV4;
+	}
+	if (!have_ula) {
+		return APMON_PICK_IPV4;
+	}
+	if (ula_ready) {
+		return APMON_PICK_ULA;
+	}
+	if (waited_ms < APMON_ULA_WAIT_MS) {
+		return APMON_PICK_WAIT;
+	}
+	return APMON_PICK_IPV4;
+}
+
+/*
+ * r32: a failed ULA send falls back to IPv4. A failed IPv4 send (in fallback, or because
+ * the ULA was not ready in time) goes back to the ULA, never forcing a second IPv4 try.
+ */
+int apmon_fallback_after_failure(int failed_was_ula)
+{
+	if (failed_was_ula) {
+		return 1;
+	}
+	return 0;
+}

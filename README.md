@@ -19,6 +19,8 @@ Status: **2.0.0beta, first testable build.** Protocol: [docs/PROTOCOL.md](docs/P
 
 On every node: same `apmon_seed` and `port` (default 2468) in `/etc/config/apmond`. The node whose default route does not go through `br-lan` becomes the collector; the others send to the lan's DHCP server or gateway (or to `option collector`).
 
+A sender sends to the collector ULA `<prefix>:<subnet>::1` (`collector_via` `ula`). At start it waits up to 30 s for its own node ULA to finish duplicate address detection before choosing (logged: `waiting up to 30 s for node ULA ...`, then `node ULA ready after N ms`); only if the ULA is still not ready, or a send to the ULA fails, does it use the lan's IPv4 gateway (`collector_via` `ipv4`), trying the ULA again after 10 IPv4 reports or after a failed IPv4 send (r32).
+
 On the collector:
 
     ubus call apmond status

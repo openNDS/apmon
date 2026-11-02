@@ -119,6 +119,20 @@ uint64_t apmon_monotonic_ms(void);
 void apmon_hex_encode(const uint8_t *in, size_t len, char *out);
 int apmon_hex_decode(const char *in, uint8_t *out, size_t out_len);
 void apmon_mac_format(const uint8_t id[APMON_ID_LEN], char out[18]);
+/*
+ * r32 sender collector address. The ULA is preferred; while the node's own ULA is still
+ * in DAD, wait up to APMON_ULA_WAIT_MS for it, then use the IPv4 gateway.
+ */
+#define APMON_ULA_WAIT_MS 30000
+enum apmon_collector_pick {
+	APMON_PICK_ULA,
+	APMON_PICK_WAIT,
+	APMON_PICK_IPV4
+};
+enum apmon_collector_pick apmon_collector_pick(int have_ula, int ula_ready, int ipv4_fallback,
+					       uint64_t waited_ms);
+/* After a failed send: the new ipv4_fallback. Only a failed ULA send moves to IPv4. */
+int apmon_fallback_after_failure(int failed_was_ula);
 void apmon_sender_summary(uint64_t sent, uint64_t failed, uint32_t last_status, char *out, size_t len);
 int apmon_mac_parse(const char *s, uint8_t id[APMON_ID_LEN]);
 

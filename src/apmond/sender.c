@@ -153,23 +153,13 @@ static const char *collector_name(void)
 	return apmond.collector_addr;
 }
 
-static void choose_collector_address(void)
+/* r32: when the wait for our own ULA began (0: not waiting) */
+static uint64_t ula_wait_start_ms;
+
+static void use_ipv4_gateway(void)
 {
 	char ifname[32];
 	char gateway[64];
-
-	if (apmond.cfg.collector[0] != '\0') {
-		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.cfg.collector);
-		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "config");
-		return;
-	}
-
-	/* Until our own ULA has passed DAD it cannot be a source address: use IPv4 meanwhile */
-	if (!apmond.ipv4_fallback && apmond.router_ula[0] != '\0' && apmond_ula_node_ready()) {
-		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.router_ula);
-		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ula");
-		return;
-	}
 
 	if (apmond_lan_gateway(apmond.ubus, gateway, sizeof(gateway)) == 0 ||
 	    apmond_default_route(ifname, sizeof(ifname), gateway, sizeof(gateway)) == 0) {
@@ -180,6 +170,56 @@ static void choose_collector_address(void)
 
 	snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.router_ula);
 	snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ula");
+}
+
+/* Returns 1 while waiting for our own ULA to pass DAD (nothing is sent meanwhile), else 0 */
+static int choose_collector_address(void)
+{
+	enum apmon_collector_pick pick;
+	uint64_t now = apmon_monotonic_ms();
+	uint64_t waited = 0;
+	int have_ula = apmond.router_ula[0] != '\0';
+	int ready = apmond_ula_node_ready();
+
+	if (apmond.cfg.collector[0] != '\0') {
+		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.cfg.collector);
+		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "config");
+		return 0;
+	}
+
+	if (ula_wait_start_ms != 0) {
+		waited = now - ula_wait_start_ms;
+	}
+	pick = apmon_collector_pick(have_ula, ready, apmond.ipv4_fallback, waited);
+
+	if (pick == APMON_PICK_WAIT) {
+		if (ula_wait_start_ms == 0) {
+			ula_wait_start_ms = now;
+			LOG_NOTICE_("waiting up to %d s for node ULA %s to finish DAD before choosing the collector",
+				    APMON_ULA_WAIT_MS / 1000, apmond.node_ula);
+		}
+		return 1;
+	}
+
+	if (ula_wait_start_ms != 0) {
+		if (pick == APMON_PICK_ULA) {
+			LOG_NOTICE_("node ULA ready after %llu ms", (unsigned long long)waited);
+		} else {
+			LOG_NOTICE_("node ULA not ready after %d s, using the IPv4 gateway", APMON_ULA_WAIT_MS / 1000);
+			/* do not wait again every cycle: retry the ULA after 10 IPv4 reports, as after a failure */
+			apmond.ipv4_fallback = 1;
+		}
+		ula_wait_start_ms = 0;
+	}
+
+	if (pick == APMON_PICK_ULA) {
+		snprintf(apmond.collector_addr, sizeof(apmond.collector_addr), "%s", apmond.router_ula);
+		snprintf(apmond.collector_via, sizeof(apmond.collector_via), "ula");
+		return 0;
+	}
+
+	use_ipv4_gateway();
+	return 0;
 }
 
 /* set while the collector listener cannot open: logged once at err, again only after recovery */
@@ -208,9 +248,28 @@ static void give_up_collector(void)
 	apmond_collector_stop();
 }
 
+/* r32: set by decide_role while a sender waits for its ULA */
+static int ula_waiting;
+
+static void apply_role(enum apmond_role role)
+{
+	if (role != apmond.role) {
+		apmond.role = role;
+		apmond.time_synced = 0;
+		if (role == ROLE_COLLECTOR) {
+			LOG_NOTICE_("role: collector");
+		} else {
+			LOG_NOTICE_("role: sender, collector %s port %d", apmond.collector_addr, apmond.cfg.port);
+		}
+	}
+
+	if (role != ROLE_COLLECTOR && apmond_collector_running()) {
+		apmond_collector_stop();
+	}
+}
+
 static void decide_role(void)
 {
-	enum apmond_role role;
 	int candidate;
 	int holding;
 
@@ -240,25 +299,20 @@ static void decide_role(void)
 	}
 
 	if (holding) {
-		role = ROLE_COLLECTOR;
-	} else {
-		role = ROLE_SENDER;
-		choose_collector_address();
+		ula_waiting = 0;
+		apply_role(ROLE_COLLECTOR);
+		return;
 	}
-
-	if (role != apmond.role) {
-		apmond.role = role;
-		apmond.time_synced = 0;
-		if (role == ROLE_COLLECTOR) {
-			LOG_NOTICE_("role: collector");
-		} else {
-			LOG_NOTICE_("role: sender, collector %s port %d", apmond.collector_addr, apmond.cfg.port);
+	if (choose_collector_address()) {
+		/* r32: no new role (so nothing sent) until the ULA is ready or the wait ends */
+		ula_waiting = 1;
+		if (apmond_collector_running()) {
+			apmond_collector_stop();
 		}
+		return;
 	}
-
-	if (role != ROLE_COLLECTOR && apmond_collector_running()) {
-		apmond_collector_stop();
-	}
+	ula_waiting = 0;
+	apply_role(ROLE_SENDER);
 }
 
 static uint16_t header_flags(void)
@@ -319,12 +373,8 @@ static int exchange(uint8_t type, const char *plaintext, char **reply)
 				    &status, &resp, &resp_len) != 0) {
 		LOG_INFO_("collector %s port %d not reachable", apmond.collector_addr, apmond.cfg.port);
 		status = 0;
-		/* try the other address (ULA <-> IPv4 gateway) next time */
-		if (apmond.ipv4_fallback) {
-			apmond.ipv4_fallback = 0;
-		} else {
-			apmond.ipv4_fallback = 1;
-		}
+		/* r32: only a failed ULA send moves to IPv4; a failed IPv4 send goes back to the ULA */
+		apmond.ipv4_fallback = apmon_fallback_after_failure(strcmp(apmond.collector_via, "ula") == 0);
 	}
 	free(msg);
 
@@ -447,7 +497,21 @@ static void report_cb(struct uloop_timeout *t)
 		}
 	}
 
-	decide_role();
+	if (ula_waiting) {
+		/* r32: only re-check our ULA while waiting, so the claim logic keeps its own pace */
+		if (choose_collector_address()) {
+			uloop_timeout_set(t, 1000);
+			return;
+		}
+		ula_waiting = 0;
+		apply_role(ROLE_SENDER);
+	} else {
+		decide_role();
+		if (ula_waiting) {
+			uloop_timeout_set(t, 1000);
+			return;
+		}
+	}
 
 	if (apmond.role == ROLE_COLLECTOR) {
 		apmond_collector_housekeeping();
