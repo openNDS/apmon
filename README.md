@@ -66,9 +66,9 @@ Example:
 
 ## Node id
 
-A node is identified by its factory (label) MAC, `node_mac`. apmond takes it from the first of these that gives one, the same chain mesh11sd 8.0.0 will use from libapmon (`apmon_factory_mac()` in `src/lib/factory_mac.c`), so both always agree on a node's id:
+A node is identified by its factory (label) MAC, `node_mac`. apmond takes it from the first of these that gives one, the same chain mesh11sd 8.0.0 will use in its own `mesh11sd_factory_mac()` (apmond's is `apmon_factory_mac()` in `src/lib/factory_mac.c`; mesh11sd does not depend on apmond), kept in agreement by shared test vectors, so both always agree on a node's id:
 
-1. the device tree: `aliases/label-mac-device`, that node's `mac-address`, else `local-mac-address`
+1. the device tree: `aliases/label-mac-device`, that node's `mac-address`, else `local-mac-address`. Newer ujail (OpenWrt master) hides `/sys/firmware` inside the jail, so the init script copies just those files to `/tmp/apmond/devicetree` before starting the jailed daemon, which reads the copy when it cannot see the device tree itself
 2. `/etc/board.json` `system.label_macaddr`
 3. `uci system.@system[0].label_macaddr` (set this to override the id on an odd board)
 4. the permanent MAC of the WAN device (`ubus call network.interface.wan status`, `device`, else `l3_device`)

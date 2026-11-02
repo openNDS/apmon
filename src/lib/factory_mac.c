@@ -1,13 +1,16 @@
 /*
- * Factory (label) MAC address: the node id. Shared by apmond and mesh11sd 8.0.0
- * (both link libapmon), so the two always agree on a node's id, even on a board
- * where the chain picks the wrong MAC.
+ * Factory (label) MAC address: the node id. mesh11sd 8.0.0 does not link libapmon
+ * (apmond stays optional); it has its own mesh11sd_factory_mac() with the same
+ * chain, and the two are kept in agreement by shared test vectors, so both give a
+ * node the same id, even on a board where the chain picks the wrong MAC.
  * Also apmon_ifindex_action: when the collector re-binds its listener.
  * No OpenWrt libraries, so it is unit tested on the host against a fake root tree.
  *
  * Order (as mesh11sd get_factory_mac):
  *  1. device tree: /sys/firmware/devicetree/base/aliases/label-mac-device
- *     (else /proc/device-tree/...) names a node; its mac-address, else
+ *     (else /proc/device-tree/..., else the copy the init script makes in
+ *     /tmp/apmond/devicetree before the jail starts: newer ujail mounts an empty
+ *     tmpfs over /sys/firmware) names a node; its mac-address, else
  *     local-mac-address (6 binary bytes)
  *  2. /etc/board.json system.label_macaddr
  *  3. /etc/config/system option label_macaddr in the first "config system"
@@ -38,6 +41,9 @@
 #include <linux/sockios.h>
 
 #include "apmon.h"
+
+/* device tree copy made by the init script before ujail hides /sys/firmware */
+#define APMON_DT_COPY "/tmp/apmond/devicetree"
 
 static int mac_is_zero(const uint8_t mac[APMON_ID_LEN])
 {
@@ -203,7 +209,10 @@ static int dt_label_mac(const char *root, uint8_t out[APMON_ID_LEN])
 	if (dt_label_mac_in(root, "/sys/firmware/devicetree/base", out) == 0) {
 		return 0;
 	}
-	return dt_label_mac_in(root, "/proc/device-tree", out);
+	if (dt_label_mac_in(root, "/proc/device-tree", out) == 0) {
+		return 0;
+	}
+	return dt_label_mac_in(root, APMON_DT_COPY, out);
 }
 
 /* Parse "xx:xx:xx:xx:xx:xx" at p (17 characters), refusing zero */

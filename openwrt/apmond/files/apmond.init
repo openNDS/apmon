@@ -16,6 +16,43 @@ prepare_log_dir() {
 	chown -R apmond:apmond "$dir"
 }
 
+# Node id step 1: newer ujail mounts an empty tmpfs over /sys/firmware, hiding the
+# device tree, so copy the label-mac-device alias and that node's MAC properties
+# to /tmp/apmond/devicetree first (root owned, read only for the daemon)
+copy_devicetree_label() {
+	local base=/sys/firmware/devicetree/base
+	local copy=/tmp/apmond/devicetree
+	local node
+	local prop
+
+	rm -rf "$copy"
+	if [ ! -f "$base/aliases/label-mac-device" ]; then
+		return 0
+	fi
+	node="$(tr -d '\000' < "$base/aliases/label-mac-device")"
+	case "$node" in
+		/*)
+			;;
+		*)
+			return 0
+			;;
+	esac
+	case "$node" in
+		*..*)
+			return 0
+			;;
+	esac
+	mkdir -p "$copy/aliases" "$copy$node"
+	cp "$base/aliases/label-mac-device" "$copy/aliases/label-mac-device"
+	for prop in mac-address local-mac-address; do
+		if [ -f "$base$node/$prop" ]; then
+			cp "$base$node/$prop" "$copy$node/$prop"
+		fi
+	done
+	chown -R root:root "$copy"
+	chmod -R a+rX,go-w "$copy"
+}
+
 # ujail needs procd-ujail and PID, IPC and UTS namespaces in the kernel
 jail_available() {
 	[ -x /sbin/ujail ] || return 1
@@ -65,6 +102,7 @@ start_service() {
 	chgrp apmond "$CONFIG"
 	chmod 0640 "$CONFIG"
 	prepare_log_dir /tmp/apmond
+	copy_devicetree_label
 	if [ "$log_mountpoint" != "/tmp" ] && [ -d "$log_mountpoint" ]; then
 		prepare_log_dir "$log_mountpoint/apmond"
 	fi
@@ -77,11 +115,7 @@ start_service() {
 		procd_add_jail_mount /usr/sbin
 		# wired speed fallback: popen("swconfig ...") needs a shell
 		procd_add_jail_mount /bin/sh /sbin/swconfig
-		# node id: the factory MAC from the device tree label-mac-device, then board.json
-		# label_macaddr; newer ujail masks /sys/firmware, so mount the device tree read only
-		if [ -d /sys/firmware/devicetree ]; then
-			procd_add_jail_mount /sys/firmware/devicetree
-		fi
+		# node id: the device tree copy is in /tmp/apmond (above), then board.json label_macaddr
 		if [ -f /etc/board.json ]; then
 			procd_add_jail_mount /etc/board.json
 		fi

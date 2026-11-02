@@ -882,6 +882,14 @@ static void test_factory_mac(void)
 	snprintf(cmd, sizeof(cmd), "proc/device-tree%s/mac-address", dtpath);
 	put(root, cmd, zero, 6);
 	CHECK(id_is(root, "wan", "94:83:c4:52:68:73", "board.json"), "factory mac: DT zero MAC ignored");
+	/* r30: the copy made before the jail, used only when sysfs and /proc have none */
+	put(root, "tmp/apmond/devicetree/aliases/label-mac-device", dtpath, strlen(dtpath) + 1);
+	snprintf(cmd, sizeof(cmd), "tmp/apmond/devicetree%s/mac-address", dtpath);
+	put(root, cmd, zero, 6);
+	CHECK(id_is(root, "wan", "94:83:c4:52:68:73", "board.json"), "factory mac: DT copy zero MAC ignored");
+	snprintf(cmd, sizeof(cmd), "tmp/apmond/devicetree%s/local-mac-address", dtpath);
+	put(root, cmd, "\x94\x83\xc4\xdd\xb1\xb0", 6);
+	CHECK(id_is(root, "wan", "94:83:c4:dd:b1:b0", "device tree"), "factory mac: DT copy (jail) local-mac-address");
 	snprintf(cmd, sizeof(cmd), "proc/device-tree%s/local-mac-address", dtpath);
 	put(root, cmd, dtmac, 6);
 	CHECK(id_is(root, "wan", "94:83:c4:a2:8e:c9", "device tree"), "factory mac: /proc DT local-mac-address");
