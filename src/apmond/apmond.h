@@ -81,6 +81,8 @@ struct apmond {
 	int last_status;
 	uint64_t reports_sent;
 	uint64_t reports_failed;
+	uint64_t time_sync_failed;      /* r33: time requests not answered with a valid reply */
+	char last_error[48];            /* r33: "" after a success, else apmon_exchange_error() text */
 
 	/* identity of the code (identity.c): empty hash = unknown */
 	char running_sha256[65];

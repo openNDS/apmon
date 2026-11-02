@@ -48,7 +48,7 @@ apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh1
     apmond bench                         key derivation time on this hardware
     apmond run [-c confdir]              the daemon itself (started by /etc/init.d/apmond)
 
-On a sender, `apmond status` always ends with `reports sent N  failed N  last HTTP status N` (zeros included) and a reminder that lost reports are counted on the collector (`apmond node <id>`, `lost_reports`). With `-t` the line is on stdout; in JSON mode it is on stderr, so the JSON on stdout stays parseable (r31).
+On a sender, `apmond status` always ends with `reports sent N  failed N  time sync failed N  last HTTP status N  last error E` (zeros included; r33 added the time sync count and `last error`) and a reminder that lost reports are counted on the collector (`apmond node <id>`, `lost_reports`). With `-t` the line is on stdout; in JSON mode it is on stderr, so the JSON on stdout stays parseable (r31). Status JSON has `time_sync_failed` (time requests that got no valid reply, eg a wrong `apmon_seed`: the sender then never gets to send a report) and `last_error`: empty after a success, else `no connection`, `key rejected`, `time or replay rejected`, `bad reply` or `HTTP NNN`. The collector logs messages that fail authentication at notice level, at most once per report interval, with the count since the last notice and the source address (r33).
 
 Example:
 

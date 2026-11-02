@@ -133,7 +133,15 @@ enum apmon_collector_pick apmon_collector_pick(int have_ula, int ula_ready, int 
 					       uint64_t waited_ms);
 /* After a failed send: the new ipv4_fallback. Only a failed ULA send moves to IPv4. */
 int apmon_fallback_after_failure(int failed_was_ula);
-void apmon_sender_summary(uint64_t sent, uint64_t failed, uint32_t last_status, char *out, size_t len);
+void apmon_sender_summary(uint64_t sent, uint64_t failed, uint64_t time_sync_failed, uint32_t last_status,
+			  const char *last_error, char *out, size_t len);
+/*
+ * r33: short text for the result of an exchange with the collector, for status last_error:
+ * "" on success, "no connection", "key rejected", "time or replay rejected", "bad reply", "HTTP NNN"
+ */
+void apmon_exchange_error(int status, int have_reply, char *out, size_t len);
+/* r33: 1 when a rate-limited event may be logged now (updates *last_ms), else 0 */
+int apmon_rate_limit_due(uint64_t now_ms, uint64_t *last_ms, uint64_t interval_ms);
 int apmon_mac_parse(const char *s, uint8_t id[APMON_ID_LEN]);
 
 /* json.c - small JSON writer for building payloads */

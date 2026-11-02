@@ -913,13 +913,40 @@ static void test_factory_mac(void)
 /* r31: sender status line, zeros included */
 static void test_sender_summary(void)
 {
-	char line[200];
+	char line[256];
+	char err[48];
+	uint64_t last = 0;
 
-	apmon_sender_summary(0, 0, 0, line, sizeof(line));
-	CHECK(strncmp(line, "reports sent 0  failed 0  last HTTP status 0\n", 45) == 0, "sender summary: zeros shown");
+	apmon_sender_summary(0, 0, 0, 0, "", line, sizeof(line));
+	CHECK(strncmp(line, "reports sent 0  failed 0  time sync failed 0  last HTTP status 0  last error none\n", 82) == 0,
+	      "sender summary: zeros shown");
 	CHECK(strstr(line, "apmond node <id>") != NULL, "sender summary: points to the collector for lost");
-	apmon_sender_summary(1057, 3, 200, line, sizeof(line));
-	CHECK(strncmp(line, "reports sent 1057  failed 3  last HTTP status 200\n", 50) == 0, "sender summary: counts");
+	apmon_sender_summary(1057, 3, 0, 200, NULL, line, sizeof(line));
+	CHECK(strstr(line, "reports sent 1057  failed 3  time sync failed 0  last HTTP status 200  last error none") == line,
+	      "sender summary: counts");
+	apmon_sender_summary(0, 0, 4, 401, "key rejected", line, sizeof(line));
+	CHECK(strstr(line, "time sync failed 4  last HTTP status 401  last error key rejected\n") != NULL,
+	      "sender summary: r33 key rejected shown");
+
+	/* r33 exchange error text */
+	apmon_exchange_error(200, 1, err, sizeof(err));
+	CHECK(err[0] == '\0', "exchange error: success is empty");
+	apmon_exchange_error(200, 0, err, sizeof(err));
+	CHECK(strcmp(err, "bad reply") == 0, "exchange error: 200 without a valid reply");
+	apmon_exchange_error(0, 0, err, sizeof(err));
+	CHECK(strcmp(err, "no connection") == 0, "exchange error: no connection");
+	apmon_exchange_error(401, 0, err, sizeof(err));
+	CHECK(strcmp(err, "key rejected") == 0, "exchange error: 401 key rejected");
+	apmon_exchange_error(409, 0, err, sizeof(err));
+	CHECK(strcmp(err, "time or replay rejected") == 0, "exchange error: 409");
+	apmon_exchange_error(503, 0, err, sizeof(err));
+	CHECK(strcmp(err, "HTTP 503") == 0, "exchange error: other HTTP status");
+
+	/* r33 rate limit */
+	CHECK(apmon_rate_limit_due(1000, &last, 30000) == 1, "rate limit: first event logged");
+	CHECK(apmon_rate_limit_due(20000, &last, 30000) == 0, "rate limit: within interval suppressed");
+	CHECK(apmon_rate_limit_due(31000, &last, 30000) == 1, "rate limit: after interval logged");
+	CHECK(last == 31000, "rate limit: last time updated");
 }
 
 /* r32: collector address choice and fallback */

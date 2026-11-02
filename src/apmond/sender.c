@@ -437,6 +437,7 @@ static int time_sync(void)
 	int status;
 
 	status = exchange(APMON_TYPE_TIME_REQ, "{\"v\":2,\"type\":\"time_req\"}", &reply);
+	apmond.last_status = status;
 	if (status == 200 && reply != NULL && reply_collector_time(reply, &t, echo, sizeof(echo)) == 0) {
 		set_clock(t);
 		apmond.time_synced = 1;
@@ -446,6 +447,9 @@ static int time_sync(void)
 		return 0;
 	}
 
+	/* r33: count it and say why, so status shows a sender that never gets to send a report */
+	apmond.time_sync_failed++;
+	apmon_exchange_error(status, reply != NULL, apmond.last_error, sizeof(apmond.last_error));
 	if (status == 401) {
 		LOG_NOTICE_("collector rejected our key: check apmon_seed and key_epoch are the same on every node");
 	}
@@ -548,12 +552,14 @@ static void report_cb(struct uloop_timeout *t)
 			}
 
 			if (status == 200) {
+				apmond.last_error[0] = '\0';
 				apmond.reports_sent++;
 				apmond.last_ack_ms = apmond_sender_time();
 				LOG_DEBUG_("report %u accepted by collector %s", (unsigned int)(apmond.seq - 1),
 					   collector_name());
 			} else {
 				apmond.reports_failed++;
+				apmon_exchange_error(status, 0, apmond.last_error, sizeof(apmond.last_error));
 				LOG_INFO_("report not accepted (HTTP %d)", status);
 			}
 		}

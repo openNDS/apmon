@@ -1090,11 +1090,14 @@ static void print_sender_summary(struct blob_attr *status)
 	struct blob_attr *sent = field(status, "reports_sent");
 	struct blob_attr *failed = field(status, "reports_failed");
 	struct blob_attr *last = field(status, "last_status");
+	struct blob_attr *sync_failed = field(status, "time_sync_failed");
+	char last_error[64];
 	char role[32];
-	char line[200];
+	char line[256];
 	uint64_t n_sent = 0;
 	uint64_t n_failed = 0;
 	uint32_t n_last = 0;
+	uint64_t n_sync_failed = 0;
 	FILE *out = stderr;
 
 	text_of(status, "role", role, sizeof(role));
@@ -1110,7 +1113,11 @@ static void print_sender_summary(struct blob_attr *status)
 	if (last != NULL) {
 		n_last = blobmsg_get_u32(last);
 	}
-	apmon_sender_summary(n_sent, n_failed, n_last, line, sizeof(line));
+	if (sync_failed != NULL) {
+		n_sync_failed = blobmsg_get_u64(sync_failed);
+	}
+	text_of(status, "last_error", last_error, sizeof(last_error));
+	apmon_sender_summary(n_sent, n_failed, n_sync_failed, n_last, last_error, line, sizeof(line));
 	if (table_mode) {
 		out = stdout;
 	}

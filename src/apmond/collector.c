@@ -339,6 +339,28 @@ static const struct apmon_keys *select_keys(uint32_t epoch)
 	return &apmond.prev_keys;
 }
 
+/*
+ * r33: authentication failures at notice level, at most once per report interval, with the
+ * number since the last notice. The sender id in the header is unauthenticated: a hint only.
+ */
+static uint64_t auth_log_last_ms;
+static uint64_t auth_since_log;
+
+static void log_auth_failure(const char *source, const struct apmon_header *h)
+{
+	char mac[18];
+	uint64_t interval_ms = (uint64_t)apmond.cfg.interval * 1000;
+
+	auth_since_log++;
+	if (!apmon_rate_limit_due(apmon_monotonic_ms(), &auth_log_last_ms, interval_ms)) {
+		return;
+	}
+	apmon_mac_format(h->sender_id, mac);
+	LOG_NOTICE_("%llu message(s) failed authentication, latest from %s claiming id %s "
+		    "(different apmon_seed or key_epoch?)", (unsigned long long)auth_since_log, source, mac);
+	auth_since_log = 0;
+}
+
 int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const char *source,
 			     uint8_t **resp, size_t *resp_len)
 {
@@ -370,13 +392,14 @@ int apmond_collector_process(int is_time, const uint8_t *body, size_t len, const
 	reply_keys = select_keys(h.key_epoch);
 	if (reply_keys == NULL) {
 		count_auth++;
+		log_auth_failure(source, &h);
 		return 401;
 	}
 
 	res = apmon_open(reply_keys->s2c, body, len, &h, &pt, NULL);
 	if (res != APMON_OK) {
 		count_auth++;
-		LOG_INFO_("message from %s failed authentication (different apmon_seed?)", source);
+		log_auth_failure(source, &h);
 		return 401;
 	}
 	if (h.type != expected_type) {
@@ -878,6 +901,8 @@ static int ubus_status(struct ubus_context *ctx, struct ubus_object *obj, struct
 	blobmsg_add_u8(&bb, "clock_synced", (uint8_t)apmond.time_synced);
 	blobmsg_add_u64(&bb, "reports_sent", apmond.reports_sent);
 	blobmsg_add_u64(&bb, "reports_failed", apmond.reports_failed);
+	blobmsg_add_u64(&bb, "time_sync_failed", apmond.time_sync_failed);
+	blobmsg_add_string(&bb, "last_error", apmond.last_error);
 	blobmsg_add_u32(&bb, "last_status", (uint32_t)apmond.last_status);
 	blobmsg_add_u32(&bb, "debuglevel", (uint32_t)apmond.cfg.debuglevel);
 	apmond_blocks_list(&bb);

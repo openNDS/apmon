@@ -88,12 +88,51 @@ int apmon_mac_parse(const char *s, uint8_t id[APMON_ID_LEN])
 	return 0;
 }
 
-/* r31: the sender line of "apmond status", always printed, zeros included */
-void apmon_sender_summary(uint64_t sent, uint64_t failed, uint32_t last_status, char *out, size_t len)
+/* r31: the sender line of "apmond status", always printed, zeros included (r33: errors too) */
+void apmon_sender_summary(uint64_t sent, uint64_t failed, uint64_t time_sync_failed, uint32_t last_status,
+			  const char *last_error, char *out, size_t len)
 {
-	snprintf(out, len, "reports sent %llu  failed %llu  last HTTP status %u\n"
+	if (last_error == NULL || last_error[0] == '\0') {
+		last_error = "none";
+	}
+	snprintf(out, len, "reports sent %llu  failed %llu  time sync failed %llu  last HTTP status %u  last error %s\n"
 		 "lost reports are counted on the collector: apmond node <id>",
-		 (unsigned long long)sent, (unsigned long long)failed, (unsigned int)last_status);
+		 (unsigned long long)sent, (unsigned long long)failed, (unsigned long long)time_sync_failed,
+		 (unsigned int)last_status, last_error);
+}
+
+void apmon_exchange_error(int status, int have_reply, char *out, size_t len)
+{
+	if (status == 200 && have_reply) {
+		snprintf(out, len, "%s", "");
+		return;
+	}
+	if (status == 200) {
+		snprintf(out, len, "bad reply");
+		return;
+	}
+	if (status == 0) {
+		snprintf(out, len, "no connection");
+		return;
+	}
+	if (status == 401) {
+		snprintf(out, len, "key rejected");
+		return;
+	}
+	if (status == 409) {
+		snprintf(out, len, "time or replay rejected");
+		return;
+	}
+	snprintf(out, len, "HTTP %d", status);
+}
+
+int apmon_rate_limit_due(uint64_t now_ms, uint64_t *last_ms, uint64_t interval_ms)
+{
+	if (*last_ms != 0 && now_ms - *last_ms < interval_ms) {
+		return 0;
+	}
+	*last_ms = now_ms;
+	return 1;
 }
 
 /* r32: which collector address a sender uses now (see apmon.h) */
