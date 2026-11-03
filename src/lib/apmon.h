@@ -123,8 +123,10 @@ void apmon_mac_format(const uint8_t id[APMON_ID_LEN], char out[18]);
  * r32 sender collector address. The ULA is preferred; while the node's own ULA is still
  * in DAD, wait up to APMON_ULA_WAIT_MS for it, then use the IPv4 gateway.
  * r34: the IPv4 gateway is only the lan side one (have_lan_gateway), never the WAN default
- * route; without one the ULA is kept. A portal candidate (upstream on its WAN) that is not
- * holding the collector ULA never uses IPv4: it waits for its ULA (and keeps trying to claim).
+ * route; without one the ULA is kept. A portal candidate (upstream on its WAN) with a collector
+ * ULA never uses IPv4: it waits for its node ULA while the sender keeps running the role check
+ * once per interval (claim retry, upstream loss), r35. Only without any collector ULA (ULA setup
+ * failed) does a portal use the lan IPv4 gateway, as it has nowhere else to send.
  */
 #define APMON_ULA_WAIT_MS 30000
 enum apmon_collector_pick {

@@ -947,6 +947,11 @@ static void test_sender_summary(void)
 	CHECK(apmon_rate_limit_due(20000, &last, 30000) == 0, "rate limit: within interval suppressed");
 	CHECK(apmon_rate_limit_due(31000, &last, 30000) == 1, "rate limit: after interval logged");
 	CHECK(last == 31000, "rate limit: last time updated");
+	/* r35: role check while waiting for the ULA: first one interval after the last check */
+	last = 5000;
+	CHECK(apmon_rate_limit_due(6000, &last, 60000) == 0, "ula wait: no role check 1 s in");
+	CHECK(apmon_rate_limit_due(65000, &last, 60000) == 1, "ula wait: role check after one interval");
+	CHECK(apmon_rate_limit_due(66000, &last, 60000) == 0, "ula wait: next role check paced again");
 }
 
 /* r32, r34: collector address choice and fallback */
@@ -977,6 +982,9 @@ static void test_collector_pick(void)
 	      "collector pick: portal without lan gateway keeps waiting");
 	CHECK(apmon_collector_pick(1, 1, 1, 0, 1, 1) == APMON_PICK_ULA,
 	      "collector pick: portal ignores the IPv4 fallback");
+	/* r35: a portal with no collector ULA at all (ULA setup failed) uses the lan gateway */
+	CHECK(apmon_collector_pick(0, 0, 0, 0, 1, 1) == APMON_PICK_IPV4,
+	      "collector pick: portal without collector ULA uses lan IPv4");
 	CHECK(apmon_fallback_after_failure(1, 0) == 1, "fallback: failed ULA send moves to IPv4");
 	CHECK(apmon_fallback_after_failure(0, 0) == 0, "fallback: failed IPv4 send goes back to the ULA");
 	CHECK(apmon_fallback_after_failure(1, 1) == 0, "fallback: portal failed ULA send stays on the ULA");

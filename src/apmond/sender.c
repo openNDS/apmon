@@ -138,8 +138,9 @@ static int collector_candidate(void)
 }
 
 /*
- * Sender target: option collector if set, else the collector ULA <prefix>:<subnet>::1,
- * falling back to the default gateway's IPv4 address after a failed attempt (and back again).
+ * Sender target: option collector if set, else the collector ULA <prefix>:<subnet>::1, falling
+ * back to the lan side IPv4 gateway (never the WAN default route) after a failed attempt (and
+ * back again). A collector candidate does not fall back.
  */
 /* For log messages: the collector's own reports never leave the node */
 static const char *collector_name(void)
@@ -510,6 +511,9 @@ static int ipv4_successes;
 static void report_cb(struct uloop_timeout *t)
 {
 	int status;
+	int decide = 1;
+	uint64_t now_ms;
+	static uint64_t last_decide_ms;
 	static int uci_level = -1;
 	int level = apmond_config_read_debuglevel();
 
@@ -524,20 +528,25 @@ static void report_cb(struct uloop_timeout *t)
 		}
 	}
 
+	/*
+	 * r35: while waiting for our ULA, re-check it every second but still run decide_role once
+	 * per interval, so the claim retry, upstream loss and the ULA re-add keep their own pace.
+	 */
+	now_ms = apmon_monotonic_ms();
 	if (ula_waiting) {
-		/* r32: only re-check our ULA while waiting, so the claim logic keeps its own pace */
-		if (choose_collector_address()) {
-			uloop_timeout_set(t, 1000);
-			return;
-		}
+		decide = apmon_rate_limit_due(now_ms, &last_decide_ms, (uint64_t)apmond.cfg.interval * 1000);
+	} else {
+		last_decide_ms = now_ms;
+	}
+	if (decide) {
+		decide_role();
+	} else if (!choose_collector_address()) {
 		ula_waiting = 0;
 		apply_role(ROLE_SENDER);
-	} else {
-		decide_role();
-		if (ula_waiting) {
-			uloop_timeout_set(t, 1000);
-			return;
-		}
+	}
+	if (ula_waiting) {
+		uloop_timeout_set(t, 1000);
+		return;
 	}
 
 	if (apmond.role == ROLE_COLLECTOR) {
