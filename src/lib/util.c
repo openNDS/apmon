@@ -126,6 +126,18 @@ void apmon_exchange_error(int status, int have_reply, char *out, size_t len)
 	snprintf(out, len, "HTTP %d", status);
 }
 
+/* r36: -v and --version, as apmond 1.x and mesh11sd */
+int apmon_is_version_arg(const char *arg)
+{
+	if (strcmp(arg, "-v") == 0) {
+		return 1;
+	}
+	if (strcmp(arg, "--version") == 0) {
+		return 1;
+	}
+	return 0;
+}
+
 int apmon_rate_limit_due(uint64_t now_ms, uint64_t *last_ms, uint64_t interval_ms)
 {
 	if (*last_ms != 0 && now_ms - *last_ms < interval_ms) {

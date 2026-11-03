@@ -146,6 +146,8 @@ void apmon_sender_summary(uint64_t sent, uint64_t failed, uint64_t time_sync_fai
  * "" on success, "no connection", "key rejected", "time or replay rejected", "bad reply", "HTTP NNN"
  */
 void apmon_exchange_error(int status, int have_reply, char *out, size_t len);
+/* r36: 1 for the command line version options -v and --version, else 0 */
+int apmon_is_version_arg(const char *arg);
 /* r33: 1 when a rate-limited event may be logged now (updates *last_ms), else 0 */
 int apmon_rate_limit_due(uint64_t now_ms, uint64_t *last_ms, uint64_t interval_ms);
 int apmon_mac_parse(const char *s, uint8_t id[APMON_ID_LEN]);

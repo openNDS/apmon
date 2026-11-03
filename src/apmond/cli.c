@@ -35,6 +35,7 @@ static void usage(void)
 	       "  read_log [-f]                        print the apmond log; -f keeps following it\n"
 	       "  bench                                time the key derivation on this hardware\n"
 	       "  run [-c confdir] [-u user]           run the daemon (used by /etc/init.d/apmond)\n"
+	       "  -v, --version                        print the version and exit\n"
 	       "  help, -h, --help                     this text\n"
 	       "\n"
 	       "Output is JSON; -t or --table prints readable tables. Ages: 12s, 5m, 3h, 2d.\n",
@@ -1184,6 +1185,11 @@ int apmond_cli(int argc, char **argv)
 		}
 		args[n] = argv[i];
 		n++;
+	}
+
+	if (n == 1 && apmon_is_version_arg(args[0])) {
+		printf("apmond %s\n", APMOND_VERSION);
+		return 0;
 	}
 
 	if (n == 0 || strcmp(args[0], "help") == 0 || strcmp(args[0], "-h") == 0 || strcmp(args[0], "--help") == 0) {

@@ -38,6 +38,7 @@ mesh11sd is optional. apmond 2.x does not conflict with mesh11sd. On mesh11sd no
 
 `apmond` is also a thin ubus client of the running daemon. Output is JSON, indented as jq and apmond 1.x print it (two spaces; `ubus call apmond ...` keeps libubox's own format); add `-t` or `--table` for aligned tables.
 
+    apmond -v | --version                print the version line (eg apmond 2.0.0beta) and exit 0
     apmond status                        this node: version and build identity, role and why, ULAs, collector, counters, debuglevel, blocks
     apmond nodes                         collector: every node with its info, APs and clients (as 1.x show_ap_data)
     apmond node <node_mac>               collector: one node, same layout as nodes

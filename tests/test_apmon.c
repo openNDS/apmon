@@ -942,6 +942,12 @@ static void test_sender_summary(void)
 	apmon_exchange_error(503, 0, err, sizeof(err));
 	CHECK(strcmp(err, "HTTP 503") == 0, "exchange error: other HTTP status");
 
+	/* r36 version options */
+	CHECK(apmon_is_version_arg("-v") == 1, "version arg: -v");
+	CHECK(apmon_is_version_arg("--version") == 1, "version arg: --version");
+	CHECK(apmon_is_version_arg("-V") == 0, "version arg: -V is not one");
+	CHECK(apmon_is_version_arg("version") == 0, "version arg: version is not one");
+
 	/* r33 rate limit */
 	CHECK(apmon_rate_limit_due(1000, &last, 30000) == 1, "rate limit: first event logged");
 	CHECK(apmon_rate_limit_due(20000, &last, 30000) == 0, "rate limit: within interval suppressed");
