@@ -17,9 +17,9 @@ Status: **2.0.0beta, first testable build.** Protocol: [docs/PROTOCOL.md](docs/P
 
 ## Using it
 
-On every node: same `apmon_seed` and `port` (default 2468) in `/etc/config/apmond`. The node whose default route does not go through `br-lan` becomes the collector; the others send to the lan's DHCP server or gateway (or to `option collector`).
+On every node: same `apmon_seed` and `port` (default 2468) in `/etc/config/apmond`. The access points can be linked in any way (cabled, mesh, point-to-point, fibre); apmond only needs them on one LAN. With `role auto`, an access point with an upstream gateway on its WAN (netifd `wan` or `wan6` up with a default route) is a collector candidate and the first to claim the collector ULA becomes the collector; the others are senders (or send to `option collector`).
 
-A sender sends to the collector ULA `<prefix>:<subnet>::1` (`collector_via` `ula`). At start it waits up to 30 s for its own node ULA to finish duplicate address detection before choosing (logged: `waiting up to 30 s for node ULA ...`, then `node ULA ready after N ms`); only if the ULA is still not ready, or a send to the ULA fails, does it use the lan's IPv4 gateway (`collector_via` `ipv4`), trying the ULA again after 10 IPv4 reports or after a failed IPv4 send (r32).
+A sender sends to the collector ULA `<prefix>:<subnet>::1` (`collector_via` `ula`). At start it waits up to 30 s for its own node ULA to finish duplicate address detection before choosing (logged: `waiting up to 30 s for node ULA ...`, then `node ULA ready after N ms`); only if the ULA is still not ready, or a send to the ULA fails, does it use the lan's IPv4 gateway (`collector_via` `ipv4`), trying the ULA again after 10 IPv4 reports or after a failed IPv4 send (r32). Only the lan side gateway is used, never the WAN default route; with none the sender stays on the ULA. A collector candidate never falls back to IPv4: it waits for its node ULA and keeps trying to claim (r34).
 
 On the collector:
 
@@ -30,7 +30,9 @@ On the collector:
 
 `apmond bench` prints how long key derivation takes on the device.
 
-apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh11sd.setup.apmond_enable='0'` so mesh11sd's built-in (1.x protocol) apmond is off.
+### Using apmond with mesh11sd
+
+mesh11sd is optional. apmond 2.x does not conflict with mesh11sd. On mesh11sd nodes set `uci set mesh11sd.setup.apmond_enable='0'` so mesh11sd's built-in (1.x protocol) apmond is off. apmond 1.x conflicts with mesh11sd. With mesh11sd auto configuration, LuCI is disabled on a portal until `mesh11sd commit_all commit` is run there.
 
 ## Command line
 
@@ -79,7 +81,7 @@ A node is identified by its factory (label) MAC, `node_mac`. apmond takes it fro
 5. the first of `eth1`, `eth0`, `lan0`, `lan1` with a universally administered permanent MAC
 6. the lowest-ifindex ethernet device with a universally administered permanent MAC
 
-A permanent MAC is what `ethtool -P` shows, else the current MAC when the kernel says it was never changed (`addr_assign_type` 0), so a MAC rewritten by mesh11sd is never used. All-zero MACs are ignored, and locally administered ones at steps 5 and 6. If nothing fits, apmond logs an error and does not start; there is no br-lan fallback. The source used is logged at start: `node id ... (factory MAC from ...)`.
+A permanent MAC is what `ethtool -P` shows, else the current MAC when the kernel says it was never changed (`addr_assign_type` 0), so a MAC rewritten at runtime (eg by mesh11sd) is never used. All-zero MACs are ignored, and locally administered ones at steps 5 and 6. If nothing fits, apmond logs an error and does not start; there is no br-lan fallback. The source used is logged at start: `node id ... (factory MAC from ...)`.
 
 Upgrading from r28 or older: on boards where the old chain fell back to an interface MAC, the id can change, so the node shows up once as a new node (forget the old one with `apmond forget <old node_mac>`). Example: the GL-BE10000 on snapshot, where r28 used eth1 as rewritten by mesh11sd (`96:83:c4:e7:b1:b1`) and r29 reads the device tree label MAC (`94:83:c4:dd:b1:b1`).
 
